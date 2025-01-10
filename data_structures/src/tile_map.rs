@@ -7,6 +7,7 @@ use std::{
 use memory_math::{
     memory_extents2d::{HasMemExtents2D, MemExtents2D},
     memory_index2d::MemIndex2D,
+    memory_vect2d::MemVect2D,
 };
 
 use super::{
