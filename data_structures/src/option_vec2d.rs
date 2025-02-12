@@ -4,7 +4,7 @@ use memory_math::{
     memory_extents2d::MemExtents2D, memory_index2d::MemIndex2D, memory_range::LeftToRightRead,
 };
 
-use super::{vec2d::Vec2D, vec2d_iter::Vec2DIntoIter, vec_2d::Vector2D};
+use super::{vec2d::Vec2D, vec2d_iter::Vec2DIntoIter};
 
 //OptionVec Contains a Vec<Option<T>>
 pub struct OptionVec2D<T> {
@@ -42,7 +42,7 @@ impl<T> Index<MemIndex2D> for OptionVec2D<T> {
     }
 }
 
-impl<T> Vector2D<T> for OptionVec2D<T> {
+impl<T> OptionVec2D<T> {
     #[inline]
     fn width(&self) -> usize {
         self.width
@@ -66,6 +66,29 @@ impl<T> Vector2D<T> for OptionVec2D<T> {
                 .map(|e| -> Option<T> { Some(e) })
                 .collect(),
         }
+    }
+
+    pub fn index2d_in_bounds(&self, index: MemIndex2D) -> bool {
+        return index.row < self.height() && index.col < self.width();
+    }
+
+    pub fn index_to_index2d(&self, index: usize) -> Option<MemIndex2D> {
+        if index >= self.len() {
+            return None;
+        }
+
+        let row = index / self.width();
+        let col = index % self.width();
+
+        Some(MemIndex2D::new(row, col))
+    }
+
+    pub fn index2d_to_index(&self, coordinates: MemIndex2D) -> Option<usize> {
+        if coordinates.row >= self.height() || coordinates.col >= self.width() {
+            return None;
+        }
+
+        Some(coordinates.row * self.width() + coordinates.col)
     }
 }
 
@@ -169,4 +192,3 @@ impl<T: Clone> OptionVec2D<T> {
         Ok(items)
     }
 }
-

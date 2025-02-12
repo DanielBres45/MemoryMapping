@@ -8,7 +8,7 @@ use memory_math::{
     memory_vect2d::MemVect2D,
 };
 
-use super::{iter_index2d::CanIterIndex2D, vec2d_iter::Vec2DIntoIter, vec_2d::Vector2D};
+use super::{iter_index2d::CanIterIndex2D, vec2d_iter::Vec2DIntoIter};
 
 #[derive(Clone)]
 pub struct Vec2D<T> {
@@ -79,47 +79,86 @@ impl<T> IndexMut<usize> for Vec2D<T> {
     }
 }
 
-impl<T: Clone> Vec2D<T> {
-    pub fn new_from_extents_reference(extents: MemExtents2D, ref_item: &T) -> Self {
-        Self::new_size_reference(extents.width(), extents.height(), ref_item)
-    }
-
-    pub fn new_size_reference(width: usize, height: usize, ref_item: &T) -> Self {
-        let items = vec![ref_item.clone(); width * height];
-        Vec2D {
-            width,
-            height,
-            items,
-        }
-    }
-}
-
-impl<T> Vector2D<T> for Vec2D<T> {
+impl<T> Vec2D<T> {
     #[inline]
-    fn width(&self) -> usize {
+    pub fn width(&self) -> usize {
         self.width
     }
 
     #[inline]
-    fn height(&self) -> usize {
+    pub fn height(&self) -> usize {
         self.height
     }
 
+    pub fn extents(&self) -> MemExtents2D {
+        MemExtents2D::new_width_height(self.width(), self.height())
+    }
+
     #[inline]
-    fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.items.len()
     }
 
-    fn new(items: Vec<T>, width: usize, height: usize) -> Self {
+    pub fn index2d_in_bounds(&self, index: MemIndex2D) -> bool {
+        return index.row < self.height() && index.col < self.width();
+    }
+
+    pub fn index_to_index2d(&self, index: usize) -> Option<MemIndex2D> {
+        if index >= self.len() {
+            return None;
+        }
+
+        let row = index / self.width();
+        let col = index % self.width();
+
+        Some(MemIndex2D::new(row, col))
+    }
+
+    pub fn index2d_to_index(&self, coordinates: MemIndex2D) -> Option<usize> {
+        if coordinates.row >= self.height() || coordinates.col >= self.width() {
+            return None;
+        }
+
+        Some(coordinates.row * self.width() + coordinates.col)
+    }
+
+    pub fn new_from_flatpack(flatpack: Vec<T>, width: usize, height: usize) -> Result<Self, String>
+    where
+        Self: Sized,
+    {
+        if flatpack.len() % width * height != 0 {
+            return Err("flatpack vec has improper size for width, and height".to_string());
+        }
+
+        Ok(Self::new(flatpack, width, height))
+    }
+
+    pub fn new_size_reference(width: usize, height: usize, ref_item: &T) -> Self
+    where
+        T: Clone,
+        Self: Sized,
+    {
+        let items = vec![ref_item.clone(); width * height];
+
+        Self::new(items, width, height)
+    }
+
+    pub fn new_from_extents_reference(extents: MemExtents2D, ref_item: &T) -> Self
+    where
+        T: Clone,
+        Self: Sized,
+    {
+        Self::new_size_reference(extents.width(), extents.height(), ref_item)
+    }
+
+    pub fn new(items: Vec<T>, width: usize, height: usize) -> Self {
         Vec2D {
             items,
             width,
             height,
         }
     }
-}
 
-impl<T> Vec2D<T> {
     pub fn get_mut(&mut self, coordinates: MemIndex2D) -> Option<&mut T> {
         let index = match self.index2d_to_index(coordinates) {
             Some(val) => val,
@@ -151,4 +190,3 @@ impl<T> Vec2D<T> {
         }
     }
 }
-

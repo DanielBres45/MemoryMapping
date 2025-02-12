@@ -10,9 +10,7 @@ use memory_math::{
     memory_vect2d::MemVect2D,
 };
 
-use super::{
-    iter_index2d::CanIterIndex2D, vec2d::Vec2D, vec2d_iter::Vec2DIntoIter, vec_2d::Vector2D,
-};
+use super::{iter_index2d::CanIterIndex2D, vec2d::Vec2D, vec2d_iter::Vec2DIntoIter};
 
 //A TileMap is a 2d Vec containing uniformy sized, compact, square tiles
 // of size nxn. This way you can perform operations like get_tile_at(2,2) \
