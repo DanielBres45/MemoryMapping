@@ -9,14 +9,4 @@ pub mod offset_coordinate;
 pub mod offset_iter;
 pub mod offset_vect2d;
 pub mod vector_math;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub mod memory_line;

@@ -56,6 +56,8 @@ impl Add<MemVect2D> for MemIndex2D{
     }
 }
 
+
+
 impl TryFrom<OffsetCoordinate2D> for MemIndex2D
 {
     type Error = &'static str;
@@ -95,6 +97,39 @@ impl Sub<MemVect2D> for MemIndex2D{
             Some(v_val) => Some(Self::from(v_val)),
             None => None
         }
+    }
+}
+
+impl TryFrom<(f32, f32)> for MemIndex2D
+{
+    type Error = String;
+
+    fn try_from(value: (f32, f32)) -> Result<Self, Self::Error> {
+        let (row, col) = value;
+
+        if !f32::is_finite(row)
+        {
+            return Err(format!("row value: {} is not a number", row));
+        }
+
+        let row_val: usize = match usize::try_from(row.round() as i32) {
+            Ok(v) => v,
+            Err(_) => {return Err(format!("row is not a usize: {}", row));}
+        };
+
+        if !f32::is_finite(col)
+        {
+            return Err(format!("col value: {} is not a number", col));
+        }
+
+        let col_val: usize = match usize::try_from(col.round() as i32)
+        {
+            Ok(c) => c,
+            Err(_) => {return Err(format!("col is not a usize: {}", col));}
+        };
+
+        Ok(MemIndex2D { row: row_val, col: col_val })
+
     }
 }
 
