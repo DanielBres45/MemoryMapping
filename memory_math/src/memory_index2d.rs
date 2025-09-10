@@ -36,11 +36,15 @@ impl PartialEq for MemIndex2D{
 
 impl PartialOrd for MemIndex2D{
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        match self.row.partial_cmp(&other.row) {
-            Some(core::cmp::Ordering::Equal) => {}
-            ord => return ord,
+
+        let row_compare = self.row.partial_cmp(&other.row).unwrap(); //usize comparison always exists
+
+        match row_compare
+        {
+            std::cmp::Ordering::Less => Some(std::cmp::Ordering::Less),
+            std::cmp::Ordering::Equal => self.col.partial_cmp(&other.col),
+            std::cmp::Ordering::Greater => Some(std::cmp::Ordering::Greater)
         }
-        self.col.partial_cmp(&other.col)
     }
 }
 

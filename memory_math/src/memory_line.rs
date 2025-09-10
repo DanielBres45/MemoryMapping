@@ -1,5 +1,6 @@
 use crate::memory_index2d::MemIndex2D;
 
+#[derive(Debug, Clone, Copy)]
 pub struct MemLine2D
 {
     pub min: MemIndex2D,
@@ -11,6 +12,15 @@ impl MemLine2D
     pub fn new(min: MemIndex2D, max: MemIndex2D) -> Self
     {
         MemLine2D { min, max }
+    }
+
+    //flips line so that min < max
+    pub fn normalized(&self) -> Self {
+        if self.min > self.max {
+            return MemLine2D::new(self.max, self.min);
+        }
+
+        return self.clone();
     }
 
     fn plot_line_high(min: MemIndex2D, max: MemIndex2D) -> Vec<MemIndex2D>
@@ -120,20 +130,34 @@ impl MemLine2D
     {
         if self.min.row == self.max.row //horizontal line
         {
-            let mut indexes: Vec<MemIndex2D> = Vec::with_capacity(self.max.col - self.min.col);
-            for col in self.min.col..self.max.col
+            let line = self.normalized(); 
+
+            if line.min.col > line.max.col
             {
-                indexes.push(MemIndex2D { row: self.min.row, col });
+                panic!("Line not normalized {:?} > {:?}", line.min, line.max);
+            }
+
+            let mut indexes: Vec<MemIndex2D> = Vec::with_capacity(line.max.col - line.min.col);
+            for col in line.min.col..line.max.col
+            {
+                indexes.push(MemIndex2D { row: line.min.row, col });
             }
 
             return indexes;
         }
         else if self.min.col == self.max.col //vertical line
         {
-            let mut indexes: Vec<MemIndex2D> = Vec::with_capacity(self.max.row - self.min.row);
-            for row in self.min.row..self.max.row
+            let line = self.normalized();
+
+            if line.min.row > line.max.row
             {
-                indexes.push(MemIndex2D { row, col: self.min.col });
+                panic!("Line not normalized {:?} > {:?}", line.min, line.max);
+            }
+
+            let mut indexes: Vec<MemIndex2D> = Vec::with_capacity(line.max.row - line.min.row);
+            for row in line.min.row..line.max.row
+            {
+                indexes.push(MemIndex2D { row, col: line.min.col });
             }
 
             return indexes;
