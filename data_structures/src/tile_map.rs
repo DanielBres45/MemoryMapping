@@ -86,7 +86,7 @@ impl<T: HasMemExtents2D> IndexMut<CoordinateType> for TileMap<T> {
     fn index_mut(&mut self, index: CoordinateType) -> &mut Self::Output {
         let tile_index: MemIndex2D = self.coordinate_to_tile_index2d(index);
 
-        match self.tiles.get_mut(tile_index) {
+        match self.tiles.get_mut_index2d(tile_index) {
             Some(tile) => tile,
             None => panic!("Index out of bounds!"),
         }
@@ -107,7 +107,7 @@ impl<T: HasMemExtents2D> Index<CoordinateType> for TileMap<T> {
     fn index(&self, index: CoordinateType) -> &Self::Output {
         let tile_index: MemIndex2D = self.coordinate_to_tile_index2d(index);
 
-        match self.tiles.get_ref(tile_index) {
+        match self.tiles.get_ref_index2d(tile_index) {
             Some(tile) => tile,
             None => panic!("Index out of bounds!"),
         }

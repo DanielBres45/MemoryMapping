@@ -57,7 +57,7 @@ impl<T> OptionVec2D<T> {
         self.items.len()
     }
 
-    fn new(items: Vec<T>, width: usize, height: usize) -> Self {
+    pub fn new(items: Vec<T>, width: usize, height: usize) -> Self {
         OptionVec2D {
             width,
             height,
