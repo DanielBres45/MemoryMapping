@@ -9,8 +9,9 @@ use memory_math::{
     memory_index2d::MemIndex2D,
     memory_vect2d::MemVect2D,
 };
-
-use super::{iter_index2d::CanIterIndex2D, vec2d::Vec2D, vec2d_iter::Vec2DIntoIter};
+use memory_math::memory_range::LeftToRightRead;
+use crate::vec2d::{MutVec2DMethods, Vec2DMethods};
+use super::{vec2d::Vec2D, vec2d_iter::Vec2DIntoIter};
 
 //A TileMap is a 2d Vec containing uniformy sized, compact, square tiles
 // of size nxn. This way you can perform operations like get_tile_at(2,2) \
@@ -94,12 +95,15 @@ impl<T: HasMemExtents2D> IndexMut<CoordinateType> for TileMap<T> {
 }
 
 impl<T: HasMemExtents2D> HasMemExtents2D for TileMap<T> {
-    fn get_extents(&self) -> Result<MemExtents2D, &'static str> {
-        self.tiles.get_extents()
+
+    fn width(&self) -> usize {
+        self.tiles.width()
+    }
+
+    fn height(&self) -> usize {
+        self.tiles.height()
     }
 }
-
-impl<T: HasMemExtents2D> CanIterIndex2D for TileMap<T> {}
 
 impl<T: HasMemExtents2D> Index<CoordinateType> for TileMap<T> {
     type Output = T;
@@ -107,7 +111,7 @@ impl<T: HasMemExtents2D> Index<CoordinateType> for TileMap<T> {
     fn index(&self, index: CoordinateType) -> &Self::Output {
         let tile_index: MemIndex2D = self.coordinate_to_tile_index2d(index);
 
-        match self.tiles.get_ref_index2d(tile_index) {
+        match self.tiles.get_index2d(tile_index) {
             Some(tile) => tile,
             None => panic!("Index out of bounds!"),
         }
@@ -228,7 +232,7 @@ impl<T: HasMemExtents2D> TileMap<T> {
     pub fn get_tile_intersections(&self, extents: MemExtents2D) -> Vec<TileIntersection> {
         let mut intersections: Vec<TileIntersection> = Vec::with_capacity(self.tiles.len());
 
-        let iter = match self.iter_index2d() {
+        let iter = match LeftToRightRead::try_from(self.extents()) {
             Ok(val) => val,
             Err(err_str) => panic!("Cannot get tile intersections: {}", err_str),
         };

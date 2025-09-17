@@ -27,13 +27,22 @@ impl fmt::Debug for MemExtents2D
 
 pub trait HasMemExtents2D
 {
-    fn get_extents(&self) -> Result<MemExtents2D, &'static str>;
+    fn width(&self) -> usize;
+    fn height(&self) -> usize;
+    #[inline]
+    fn extents(&self) -> MemExtents2D {
+        MemExtents2D::new_width_height(self.width(), self.height())
+    }
 }
 
 impl HasMemExtents2D for MemExtents2D
 {
-    fn get_extents(&self) -> Result<MemExtents2D, &'static str> {
-        Ok(*self)
+    fn width(&self) -> usize {
+        self.max_coord.col - self.min_coord.col
+    }
+
+    fn height(&self) -> usize {
+        self.max_coord.row - self.min_coord.row
     }
 }
 
