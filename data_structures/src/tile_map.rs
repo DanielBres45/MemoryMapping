@@ -5,40 +5,80 @@ use std::{
 };
 
 use memory_math::{
-    memory_extents2d::{HasMemExtents2D, MemExtents2D},
+    memory_span2d::{HasMemSpan2D, MemSpan2D},
     memory_index2d::MemIndex2D,
-    memory_vect2d::MemVect2D,
+    memory_offset2d::MemOffset2D,
 };
-use memory_math::memory_range::LeftToRightRead;
-use crate::vec2d::{MutVec2DMethods, Vec2DMethods};
+use memory_math::memory_iterators::LinearMemoryIterator;
+use memory_math::memory_span::MemSpan;
+use crate::vec2d::{MutVec2DMethods, Vec2DMethods, Vec2DSlice};
 use super::{vec2d::Vec2D, vec2d_iter::Vec2DIntoIter};
+use memory_math::mem_grid::{GridIndex, HasMemoryGrid2D, MemGrid2D, MemoryGrid, NonUniformMemGrid2D};
+use memory_math::size_2d::{HasSize2D, Size2D};
 
-//A TileMap is a 2d Vec containing uniformy sized, compact, square tiles
-// of size nxn. This way you can perform operations like get_tile_at(2,2) \
-//which will return a reference to the tile which contains the coordinate (2,2)
-#[derive(Clone)]
-pub struct TileMap<T: HasMemExtents2D> {
-    pub tile_extents: MemExtents2D,
-    tiles: Vec2D<T>,
+pub struct TileMap<T>
+{
+    tiles: Vec2D<Vec2D<T>>,
+    grid: MemGrid2D,
 }
 
+impl<T> HasMemoryGrid2D<MemGrid2D> for TileMap<T>
+{
+    #[inline]
+    fn grid2d(&self) -> &MemGrid2D {
+        &self.grid
+    }
+}
+
+impl<T> HasSize2D for TileMap<T>
+{
+    #[inline]
+    fn row_count(&self) -> usize {
+        self.grid.row_count()
+    }
+
+    #[inline]
+    fn column_count(&self) -> usize {
+        self.grid.column_count()
+    }
+}
+
+///Range of tiles in a tilemap
+
+pub struct TileRange2D(pub MemSpan2D);
+
+impl HasSize2D for TileRange2D {
+    fn row_count(&self) -> usize {
+        self.0.row_count()
+    }
+
+    fn column_count(&self) -> usize {
+        self.0.column_count()
+    }
+
+    fn size(&self) -> Size2D {
+        self.0.size()
+    }
+}
+
+
 pub struct TileIntersection {
-    pub tile_index: MemIndex2D,
-    pub intersection: MemExtents2D,
+    pub grid_index: GridIndex,
+    pub intersection: MemSpan2D,
+}
+
+impl TileIntersection {
+    pub fn new(grid_index: GridIndex, intersection: MemSpan2D) -> Self {
+        TileIntersection {
+            grid_index,
+            intersection,
+        }
+    }
 }
 
 impl PartialEq for TileIntersection {
     fn eq(&self, other: &Self) -> bool {
-        self.tile_index == other.tile_index && self.intersection == other.intersection
-    }
-}
-
-impl TileIntersection {
-    fn new(tile_index: MemIndex2D, intersection: MemExtents2D) -> Self {
-        TileIntersection {
-            tile_index,
-            intersection,
-        }
+        self.grid_index.0 == other.grid_index.0 && self.intersection == other.intersection
     }
 }
 
@@ -46,8 +86,8 @@ impl fmt::Display for TileIntersection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "TileIntersection[tile_index: {}, intersection: {}]",
-            self.tile_index, self.intersection
+            "TileIntersection[grid_index: {}, intersection: {}]",
+            self.grid_index.0, self.intersection
         )
     }
 }
@@ -55,268 +95,238 @@ impl fmt::Display for TileIntersection {
 impl fmt::Debug for TileIntersection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TileIntersection")
-            .field("tile_index", &self.tile_index)
+            .field("grid_index", &self.grid_index.0)
             .field("intersection", &self.intersection)
             .finish()
     }
 }
 
-pub enum ExtentsScope {
-    TileExtents(MemExtents2D),
-    CellExtents(MemExtents2D),
-}
-
-pub enum CoordinateType {
-    //A coordinate pointing at a specific tile
-    TileIndex(MemIndex2D),
-    //A coordinate pointing to a global cell located inside the span of all tiles
-    CellIndex(MemIndex2D),
-}
-
-impl<T: HasMemExtents2D> IntoIterator for TileMap<T> {
-    type Item = T;
-
-    type IntoIter = Vec2DIntoIter<T>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.tiles.into_iter()
-    }
-}
-
-impl<T: HasMemExtents2D> IndexMut<CoordinateType> for TileMap<T> {
-    fn index_mut(&mut self, index: CoordinateType) -> &mut Self::Output {
-        let tile_index: MemIndex2D = self.coordinate_to_tile_index2d(index);
-
-        match self.tiles.get_mut_index2d(tile_index) {
-            Some(tile) => tile,
-            None => panic!("Index out of bounds!"),
-        }
-    }
-}
-
-impl<T: HasMemExtents2D> HasMemExtents2D for TileMap<T> {
-
-    fn width(&self) -> usize {
-        self.tiles.width()
-    }
-
-    fn height(&self) -> usize {
-        self.tiles.height()
-    }
-}
-
-impl<T: HasMemExtents2D> Index<CoordinateType> for TileMap<T> {
+impl <T> Index<MemIndex2D> for TileMap<T> {
     type Output = T;
 
-    fn index(&self, index: CoordinateType) -> &Self::Output {
-        let tile_index: MemIndex2D = self.coordinate_to_tile_index2d(index);
+    fn index(&self, index: MemIndex2D) -> &Self::Output {
+        let grid_index: GridIndex = self.grid.index2d_to_grid_index(&index).unwrap_or_else(|| panic!("Index out of bounds!"));
+        let cell_index: MemIndex2D = self.grid.index2d_relative_to_grid(&index, &grid_index).unwrap_or_else(|| panic!("Index out of bounds!"));
+        match self.tiles.get_index2d(grid_index.0) {
+            Some(tile) => tile.get_index2d(cell_index).unwrap_or_else(|| panic!("Index out of bounds!")),
+            None => panic!("Index out of bounds!"),
+        }
+    }
+}
 
-        match self.tiles.get_index2d(tile_index) {
+
+impl<T> IndexMut<MemIndex2D> for TileMap<T> {
+    fn index_mut(&mut self, index: MemIndex2D) -> &mut Self::Output {
+        let grid_index: GridIndex = self.grid.index2d_to_grid_index(&index).unwrap_or_else(|| panic!("Index out of bounds!"));
+        let cell_index: MemIndex2D = self.grid.index2d_relative_to_grid(&index, &grid_index).unwrap_or_else(|| panic!("Index out of bounds!"));
+        match self.tiles.get_mut_index2d(grid_index.0) {
+            Some(tile) => tile.get_mut_index2d(cell_index).unwrap_or_else(|| panic!("Index out of bounds!")),
+            None => panic!("Index out of bounds!"),
+        }
+    }
+}
+
+impl<T> Index<GridIndex> for TileMap<T> {
+    type Output = Vec2D<T>;
+
+    fn index(&self, index: GridIndex) -> &Self::Output {
+        match self.tiles.get_index2d(index.0) {
             Some(tile) => tile,
             None => panic!("Index out of bounds!"),
         }
     }
 }
 
-impl<T: HasMemExtents2D + Clone> TileMap<T> {
-    pub fn new_with_size_capacity_reference(
-        tile_extents: MemExtents2D,
-        capacity_width: usize,
-        capacity_height: usize,
-        ref_item: &T,
-    ) -> Self {
-        let tiles: Vec2D<T> = Vec2D::new_size_reference(capacity_width, capacity_height, ref_item);
-
-        TileMap {
-            tile_extents,
-            tiles,
+impl<T> IndexMut<GridIndex> for TileMap<T> {
+    fn index_mut(&mut self, index: GridIndex) -> &mut Self::Output {
+        match self.tiles.get_mut_index2d(index.0) {
+            Some(tile) => tile,
+            None => panic!("Index out of bounds!"),
         }
     }
 }
 
-impl<T: HasMemExtents2D> TileMap<T> {
-    pub fn new(tiles: Vec2D<T>, extents: MemExtents2D) -> Self {
-        TileMap {
-            tile_extents: extents,
+impl<T: Clone> TileMap<T> {
+
+    pub fn new_with_size_capacity_reference(
+        capacity_width: usize,
+        capacity_height: usize,
+        grid_column_count: usize,
+        grid_row_count: usize,
+        ref_item: &T
+    ) -> Option<Self> {
+
+        let items: Vec<T> = vec![ref_item.clone(); grid_column_count * grid_row_count];
+        let tile: Vec2D<T> = Vec2D::new_items_rows_columns(items, grid_row_count, grid_column_count)?;
+        let tile_list: Vec<Vec2D<T>> = vec![tile; capacity_width * capacity_height];
+        let tiles: Vec2D<Vec2D<T>> = Vec2D::new_items_rows_columns(tile_list, capacity_height, capacity_width)?;
+
+        let grid: MemGrid2D = MemGrid2D::new(tiles.size, grid_row_count, grid_column_count);
+
+        Some(TileMap {
             tiles,
+            grid
+        })
+    }
+}
+
+
+impl<T> TileMap<T> {
+    pub fn new(tiles: Vec2D<Vec2D<T>>, tile_rows: usize, tile_columns: usize) -> Self {
+        let size: Size2D = tiles.size();
+
+        TileMap {
+            tiles,
+            grid: MemGrid2D::new(size, tile_rows, tile_columns)
         }
     }
 
-    pub fn in_range(&self, coordinate: CoordinateType) -> bool {
-        match coordinate {
-            CoordinateType::TileIndex(tile) => return self.tiles.index2d_in_bounds(tile),
-            CoordinateType::CellIndex(cell) => {
-                return cell.row <= self.get_cell_height_span()
-                    && cell.col <= self.get_cell_width_span()
-            }
-        }
-    }
+    pub fn tile_extents_intersection(&self, grid_index: GridIndex, extents: &MemSpan2D) -> Option<TileIntersection>
+    {
+        if !self.grid_index_in_bounds(&grid_index) {return None;}
 
-    pub fn get_cell_height_span(&self) -> usize {
-        self.tiles.height() * self.tile_extents.height()
-    }
+        let min_row: usize = grid_index.row() * self.grid_row_count();
+        let min_col: usize = grid_index.col() * self.grid_column_count();
+        let max_row: usize = min_row + self.grid_row_count();
+        let max_col: usize = min_col + self.grid_column_count();
 
-    pub fn get_cell_width_span(&self) -> usize {
-        self.tiles.width() * self.tile_extents.width()
-    }
+        let true_tile_extents = MemSpan2D::new_from_usize(min_row, min_col, max_row, max_col);
+        let intersection = true_tile_extents.intersect(extents)?;
 
-    pub fn cell_coordinate_to_tile_index(&self, cell_coordinate: MemIndex2D) -> MemIndex2D {
-        MemIndex2D::new(
-            cell_coordinate.row / self.tile_extents.height(),
-            cell_coordinate.col / self.tile_extents.width(),
-        )
-    }
-
-    pub fn coordinate_to_index_in_tile(
-        &self,
-        index: CoordinateType,
-        tile_index: MemIndex2D,
-    ) -> Option<MemIndex2D> {
-        match index {
-            CoordinateType::TileIndex(tile_coord) => Some(MemIndex2D::origin()),
-            CoordinateType::CellIndex(cell_coord) => {
-                cell_coord - MemVect2D::from(self.tile_index_to_cell_index(tile_index))
-            }
-        }
-    }
-
-    pub fn tile_index_to_cell_index(&self, tile_index: MemIndex2D) -> MemIndex2D {
-        MemIndex2D::new(
-            tile_index.row * self.tile_extents.height(),
-            tile_index.col * self.tile_extents.width(),
-        )
-    }
-
-    pub fn coordinate_to_tile_index2d(&self, coordinate: CoordinateType) -> MemIndex2D {
-        match coordinate {
-            CoordinateType::CellIndex(index) => self.cell_coordinate_to_tile_index(index),
-            CoordinateType::TileIndex(tile_index) => tile_index,
-        }
-    }
-
-    pub fn coordinate_to_cell_index2d(&self, coordinate: CoordinateType) -> MemIndex2D {
-        match coordinate {
-            CoordinateType::CellIndex(coord) => coord,
-            CoordinateType::TileIndex(tile_coord) => MemIndex2D::new(
-                tile_coord.row * self.tile_extents.height(),
-                tile_coord.col * self.tile_extents.width(),
-            ),
-        }
-    }
-
-    pub fn try_intersect_tile(
-        &self,
-        tile_index: MemIndex2D,
-        range: MemExtents2D,
-    ) -> Option<MemExtents2D> {
-        let shift_vect =
-            MemVect2D::from(self.coordinate_to_cell_index2d(CoordinateType::TileIndex(tile_index)));
-        let normalized_tile_extents = self.tile_extents + shift_vect;
-
-        let shifted_intersection = match range.intersect(normalized_tile_extents) {
-            Some(overlap) => overlap,
-            None => {
-                return None;
-            }
-        };
-
-        if shifted_intersection.get_min_coord().row == shifted_intersection.get_max_coord().row
-            || shifted_intersection.get_min_coord().col == shifted_intersection.get_max_coord().col
+        if intersection.area() == 0
         {
             return None;
         }
 
-        shifted_intersection - shift_vect
-    }
-
-    pub fn get_tile_intersections(&self, extents: MemExtents2D) -> Vec<TileIntersection> {
-        let mut intersections: Vec<TileIntersection> = Vec::with_capacity(self.tiles.len());
-
-        let iter = match LeftToRightRead::try_from(self.extents()) {
-            Ok(val) => val,
-            Err(err_str) => panic!("Cannot get tile intersections: {}", err_str),
+        let offset: MemOffset2D = MemOffset2D::new(min_row as isize, min_col as isize);
+        let tile_intersection = TileIntersection {
+            grid_index,
+            intersection: (intersection - offset)?,
         };
+        Some(tile_intersection)
 
-        for index in iter {
-            let tile_intersection = match self.try_intersect_tile(index, extents) {
-                Some(val) => val,
-                None => {
-                    continue;
-                }
-            };
-
-            intersections.push(TileIntersection {
-                tile_index: index,
-                intersection: tile_intersection,
-            });
-        }
-
-        intersections
     }
 
-    pub fn extents_to_tile_extents(
-        &self,
-        extents: ExtentsScope,
-    ) -> Result<MemExtents2D, &'static str> {
-        match extents {
-            ExtentsScope::TileExtents(ext) => Ok(ext),
-            ExtentsScope::CellExtents(ext) => MemExtents2D::new_from_coords(
-                self.cell_coordinate_to_tile_index(ext.get_min_coord()),
-                self.cell_coordinate_to_tile_index(ext.get_max_coord()),
-            ),
+    //TODO: This can be made more efficient, because the tile extents are already known
+    //no need to check every tile
+    pub fn all_tile_intersections(&self, extents: MemSpan2D) -> Option<(TileRange2D, Vec<TileIntersection>)> {
+        let mut intersections: Vec<TileIntersection> = Vec::new();
+
+        let min_grid_index: GridIndex = self.index2d_to_grid_index(&extents.min_index2d())?;
+        let max_grid_index: GridIndex = self.index2d_to_grid_index(&extents.max_index2d())?;
+
+        for row in min_grid_index.row()..=max_grid_index.row()
+        {
+            for col in min_grid_index.col()..=max_grid_index.col()
+            {
+                let grid_index = GridIndex(MemIndex2D::new(row, col));
+                match self.tile_extents_intersection(grid_index, &extents) {
+                    Some(tile_intersection) => intersections.push(tile_intersection),
+                    None => continue,
+                }
+            }
         }
+
+        Some((TileRange2D(MemSpan2D::new_from_index2d(min_grid_index.0, max_grid_index.0)), intersections))
+    }
+
+    pub fn get_slice(&self, extents: MemSpan2D) -> Option<TileMapSlice<'_, T>> {
+        let (range, intersections) = self.all_tile_intersections(extents)?;
+        let mut tile_slices: Vec<Vec2DSlice<'_, T>> = Vec::with_capacity(intersections.len());
+
+        for intersection in intersections {
+
+            let cur_slice = self.tiles[intersection.grid_index.0].get_slice(intersection.intersection)?;
+            tile_slices.push(cur_slice);
+        }
+
+        let tile_slices = Vec2D::new_items_size( tile_slices, range.size())?;
+        // Some(TileMapSlice
+        // {
+        //     tile_slices,
+        //     row_offsets: Vec::new(),
+        //     column_offsets: Vec::new(),
+        //     cell_extents: range.0
+        // })
+        None
+    }
+
+}
+
+//TODO: make a range tree to easily access sorted range data.
+
+pub struct TileMapSlice<'a, T>
+{
+    tile_slices: Vec2D<Vec2DSlice<'a, T>>, //2d grid of row slices
+    grid: NonUniformMemGrid2D
+}
+
+impl<'a, T> TileMapSlice<'a, T>
+{
+    #[inline]
+    pub fn start_grid_row_count(&self) -> usize {
+        self.tile_slices[0].row_count()
+    }
+
+    #[inline]
+    pub fn start_grid_column_count(&self) -> usize {
+        self.tile_slices[0].column_count()
+    }
+
+    #[inline]
+    pub fn end_grid_row_count(&self) -> usize {
+        self.tile_slices[self.tile_slices.row_count() - 1].row_count()
+    }
+
+    #[inline]
+    pub fn end_grid_column_count(&self) -> usize {
+        self.tile_slices[self.tile_slices.column_count() - 1].column_count()
+    }
+
+    pub fn get(&self, cell_index2d: MemIndex2D) -> Option<&'a T> {
+        let grid_index: GridIndex = self.grid.index2d_to_grid_index(&cell_index2d)?;
+        let index_in_grid: MemIndex2D = self.grid.index2d_relative_to_grid(&cell_index2d, &grid_index)?;
+        self.tile_slices[grid_index.0].get_index2d(index_in_grid)
     }
 }
 
+
+
 #[cfg(test)]
 mod tests {
-    // Note this useful idiom: importing names from outer (for mod tests) scope.
     use super::*;
 
     #[test]
     fn test_tile_intersections_all() {
-        let tile_extents: MemExtents2D = MemExtents2D::new_width_height(10, 10);
-        let map_extents: MemExtents2D = MemExtents2D::new_width_height(3, 3);
-        let store: Vec2D<MemExtents2D> =
-            Vec2D::new_from_extents_reference(map_extents, &tile_extents);
-        let tiles: TileMap<MemExtents2D> = TileMap::new(store, tile_extents);
+        let tiles_rows: usize = 10;
+        let tiles_columns: usize = 10;
+        let tile: Vec2D<i32> =
+            Vec2D::new_size_reference(Size2D::new(tiles_rows, tiles_columns), &0);
+        let store: Vec2D<Vec2D<i32>> = Vec2D::new_size_reference(Size2D::new(3, 3), &tile);
+        let tiles: TileMap<i32> = TileMap::new(store, tiles_rows, tiles_columns);
 
-        let test_extents: MemExtents2D = MemExtents2D::new_width_height(30, 30);
-        let expected_intersections: [TileIntersection; 9] = [
-            TileIntersection::new(MemIndex2D::origin(), tile_extents),
-            TileIntersection::new(MemIndex2D::new(0, 1), tile_extents),
-            TileIntersection::new(MemIndex2D::new(0, 2), tile_extents),
-            TileIntersection::new(MemIndex2D::new(1, 0), tile_extents),
-            TileIntersection::new(MemIndex2D::new(1, 1), tile_extents),
-            TileIntersection::new(MemIndex2D::new(1, 2), tile_extents),
-            TileIntersection::new(MemIndex2D::new(2, 0), tile_extents),
-            TileIntersection::new(MemIndex2D::new(2, 1), tile_extents),
-            TileIntersection::new(MemIndex2D::new(2, 2), tile_extents),
-        ];
+        let test_extents: MemSpan2D = MemSpan2D::new_row_columns(30, 30);
+        let (tile_range, intersections) = tiles.all_tile_intersections(test_extents).unwrap(); //should be some
 
-        for (index, intersection) in tiles
-            .get_tile_intersections(test_extents)
-            .into_iter()
-            .enumerate()
-        {
-            assert_eq!(expected_intersections[index], intersection)
-        }
+        assert_eq!(9, intersections.len());
+        assert!(intersections.iter().all(|tile_intersection| tile_intersection.intersection.column_count() == 10 && tile_intersection.intersection.row_count() == 10));
     }
 
     #[test]
     fn test_tile_intersections_single() {
-        let tile_extents: MemExtents2D = MemExtents2D::new_width_height(10, 10);
-        let map_extents: MemExtents2D = MemExtents2D::new_width_height(3, 3);
-        let store: Vec2D<MemExtents2D> =
-            Vec2D::new_from_extents_reference(map_extents, &tile_extents);
-        let tiles: TileMap<MemExtents2D> = TileMap::new(store, tile_extents);
+        let tile_extents: MemSpan2D = MemSpan2D::new_row_columns(10, 10);
+        let map_extents: MemSpan2D = MemSpan2D::new_row_columns(3, 3);
+        let tile: Vec2D<i32> = Vec2D::new_size_reference(tile_extents.size(), &0);
 
-        let test_extents: MemExtents2D = MemExtents2D::new_width_height(10, 10);
+        let store: Vec2D<Vec2D<i32>> = Vec2D::new_size_reference(map_extents.size(), &tile);
+        let tiles: TileMap<i32> = TileMap::new(store, tile.row_count(), tile.column_count());
+
+        let test_extents: MemSpan2D = MemSpan2D::new_row_columns(10, 10);
 
         let expected_intersection: TileIntersection =
-            TileIntersection::new(MemIndex2D::origin(), tile_extents);
+            TileIntersection::new(GridIndex(MemIndex2D::origin()), tile_extents);
 
-        let intersects = tiles.get_tile_intersections(test_extents);
+        let (tile_range, intersects) = tiles.all_tile_intersections(test_extents).unwrap(); //should be some
         assert_eq!(1, intersects.len());
 
         assert_eq!(expected_intersection, intersects[0]);
@@ -324,21 +334,22 @@ mod tests {
 
     #[test]
     fn test_tile_intersections_partial_overlap() {
-        let tile_extents: MemExtents2D = MemExtents2D::new_width_height(10, 10);
-        let map_extents: MemExtents2D = MemExtents2D::new_width_height(3, 3);
-        let store: Vec2D<MemExtents2D> =
-            Vec2D::new_from_extents_reference(map_extents, &tile_extents);
-        let tiles: TileMap<MemExtents2D> = TileMap::new(store, tile_extents);
+        let tile_extents: MemSpan2D = MemSpan2D::new_row_columns(10, 10);
+        let map_extents: MemSpan2D = MemSpan2D::new_row_columns(3, 3);
+        let tile: Vec2D<i32> = Vec2D::new_size_reference(tile_extents.size(), &0);
+        let store: Vec2D<Vec2D<i32>> = Vec2D::new_size_reference(map_extents.size(), &tile);
+        let tiles: TileMap<i32> = TileMap::new(store, tile_extents.row_count(), tile_extents.column_count());
 
-        let test_extents: MemExtents2D = MemExtents2D::new_width_height(11, 10);
+        let test_extents: MemSpan2D = MemSpan2D::new_row_columns(11, 10);
 
         let expected_intersections: [TileIntersection; 2] = [
-            TileIntersection::new(MemIndex2D::origin(), tile_extents),
-            TileIntersection::new(MemIndex2D::new(0, 1), MemExtents2D::new_width_height(1, 10)),
+            TileIntersection::new(GridIndex(MemIndex2D::origin()), tile_extents),
+            TileIntersection::new(GridIndex(MemIndex2D::new(1, 0)), MemSpan2D::new_row_columns(1, 10)),
         ];
 
-        for (index, intersection) in tiles
-            .get_tile_intersections(test_extents)
+        let intersections = tiles.all_tile_intersections(test_extents).unwrap().1;
+
+        for (index, intersection) in intersections
             .into_iter()
             .enumerate()
         {

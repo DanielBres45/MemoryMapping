@@ -1,51 +1,31 @@
 use std::cmp::max;
-use std::ops::{Index, IndexMut};
+use std::{ops::{Index, IndexMut}, slice};
 use std::marker::PhantomData;
 
 extern crate proc_macro;
 use proc_macro::TokenStream;
 
 use memory_math::{
-    memory_extents2d::{HasMemExtents2D, MemExtents2D},
+    memory_span2d::{MemSpan2D, HasMemSpan2D},
     memory_index2d::MemIndex2D,
-    memory_iter::IterateWithMemIndex,
-    memory_range::LeftToRightRead,
-    memory_vect2d::MemVect2D,
+    memory_range_iter::IterateWithMemIndex,
+    memory_iterators::LinearMemoryIterator,
+    memory_offset2d::MemOffset2D,
 };
-
+use memory_math::memory_span::MemSpan;
+use memory_math::size_2d::{HasSize2D, Size2D};
 use super::{vec2d_iter::Vec2DIntoIter};
 
-pub trait Vec2DMethods<T> : HasMemExtents2D
+pub trait Vec2DMethods<T> : HasSize2D
 {
-    fn len(&self) -> usize;
     fn get_index2d(&self, coordinates: MemIndex2D) -> Option<&T>;
-    #[inline]
-    fn index2d_in_bounds(&self, index: MemIndex2D) -> bool {
-        return index.row < self.height() && index.col < self.width();
-    }
-    fn index_to_index2d(&self, index: usize) -> Option<MemIndex2D> {
-        if index >= self.len() {
-            return None;
-        }
-
-        let row = index / self.width();
-        let col = index % self.width();
-
-        Some(MemIndex2D::new(row, col))
-    }
-
-    fn index2d_to_index(&self, index2d: MemIndex2D) -> Option<usize> {
-        if index2d.row >= self.height() || index2d.col >= self.width() {
-            return None;
-        }
-
-        Some(index2d.row * self.width() + index2d.col)
-    }
 
     /// Get a reference to an element at 2D coordinates
     fn get(&self, row: usize, col: usize) -> Option<&T> {
         self.get_index2d(MemIndex2D::new(row, col))
     }
+    fn get_row(&self, row: usize) -> Option<&[T]>;
+
 }
 
 pub trait MutVec2DMethods<T> : Vec2DMethods<T>
@@ -59,30 +39,41 @@ pub trait MutVec2DMethods<T> : Vec2DMethods<T>
 }
 #[derive(Clone)]
 pub struct Vec2D<T> {
-    width: usize,
-    height: usize,
+    pub size: Size2D,
     items: Vec<T>,
 }
 
-impl<T> HasMemExtents2D for Vec2D<T> {
-    #[inline]
-    fn width(&self) -> usize {
-        self.width
+impl<T> HasSize2D for Vec2D<T>
+{
+    fn row_count(&self) -> usize {
+        self.size.row_count()
     }
 
-    #[inline]
-    fn height(&self) -> usize {
-        self.height
+    fn column_count(&self) -> usize {
+        self.size.column_count()
+    }
+
+    fn size(&self) -> Size2D {
+        self.size
     }
 }
+
 impl<T> Vec2DMethods<T> for Vec2D<T> {
-    #[inline]
-    fn len(&self) -> usize {
-        self.items.len()
-    }
     fn get_index2d(&self, coordinates: MemIndex2D) -> Option<&T> {
         self.index2d_to_index(coordinates).and_then(|i| self.items.get(i))
     }
+
+    /// Get a slice of a complete row
+    fn get_row(&self, row: usize) -> Option<&[T]> {
+        if row >= self.row_count() {
+            return None;
+        }
+
+        let start = row * self.column_count();
+        let end = start + self.column_count();
+        Some(&self.items[start..end])
+    }
+
 }
 
 impl<T> MutVec2DMethods<T> for Vec2D<T> {
@@ -96,7 +87,9 @@ impl<T> IntoIterator for Vec2D<T> {
     type IntoIter = Vec2DIntoIter<T>;
 
     fn into_iter(self) -> Self::IntoIter {
-        Vec2DIntoIter::new(self.items.into_iter(), self.width)
+
+        let column_count = self.column_count();
+        Vec2DIntoIter::new(self.items.into_iter(), column_count)
     }
 }
 
@@ -110,7 +103,7 @@ impl<T> Index<MemIndex2D> for Vec2D<T> {
             None => panic!(
                 "Index2d out of bounds. Index was {} but the size is {}",
                 index,
-                self.extents()
+                self.size
             ),
         }
     }
@@ -118,7 +111,7 @@ impl<T> Index<MemIndex2D> for Vec2D<T> {
 
 impl<T> IndexMut<MemIndex2D> for Vec2D<T> {
     fn index_mut(&mut self, index: MemIndex2D) -> &mut Self::Output {
-        let extents = self.extents();
+        let extents = self.size;
         match self.get_mut_index2d(index) {
             Some(v) => v,
             None => panic!(
@@ -147,33 +140,14 @@ impl<T> IndexMut<usize> for Vec2D<T> {
 }
 
 impl<T> Vec2D<T> {
-    pub fn new_from_flatpack(flatpack: Vec<T>, width: usize, height: usize) -> Result<Self, String>
-    where
-        Self: Sized,
-    {
-        if flatpack.len() % width * height != 0 {
-            return Err("flatpack vec has improper size for width, and height".to_string());
-        }
 
-        Ok(Self::new(flatpack, width, height))
-    }
-
-    pub fn new_size_reference(width: usize, height: usize, ref_item: &T) -> Self
+    pub fn new_size_reference(size: Size2D, ref_item: &T) -> Self
     where
         T: Clone,
         Self: Sized,
     {
-        let items = vec![ref_item.clone(); width * height];
-
-        Self::new(items, width, height)
-    }
-
-    pub fn new_from_extents_reference(extents: MemExtents2D, ref_item: &T) -> Self
-    where
-        T: Clone,
-        Self: Sized,
-    {
-        Self::new_size_reference(extents.width(), extents.height(), ref_item)
+        let items = vec![ref_item.clone(); size.column_count * size.row_count];
+        Vec2D {items, size}
     }
 
     pub fn from_vec(items: Vec<T>, width: usize) -> Option<Self> {
@@ -183,155 +157,274 @@ impl<T> Vec2D<T> {
 
         let height = items.len() / width;
         Some(Self {
-            width,
-            height,
+            size: Size2D::new(height, width),
             items,
         })
     }
 
-    pub fn new(items: Vec<T>, width: usize, height: usize) -> Self {
-        Vec2D {
-            items,
-            width,
-            height,
+    pub fn new_items_rows_columns(items: Vec<T>, rows: usize, columns: usize) -> Option<Self>
+    {
+        Self::new_items_size(items, Size2D::new(rows, columns))
+    }
+
+    pub fn new_items_size(items: Vec<T>, size: Size2D) -> Option<Self> {
+
+        if items.len() != size.column_count * size.row_count {
+            return None;
         }
+
+        Some(Vec2D {
+            items,
+            size
+        })
     }
 
 
     pub fn push_range(&mut self, start_index: MemIndex2D, range: Vec2D<T>) {
-        if start_index.col > self.width || start_index.row > self.height {
+        if start_index.col > self.column_count() || start_index.row > self.row_count() {
             return;
         }
 
-        let shift: MemVect2D = MemVect2D::from(start_index);
+        let shift: MemOffset2D = MemOffset2D::from(start_index);
 
         for (index, item) in range.into_iter().iterate_with_mem_index() {
-            let self_index: MemIndex2D = index + shift;
-            self[self_index] = item;
+            if let Some(self_index2d) = index + shift{
+                self[self_index2d] = item;
+            }
         }
     }
 
-    /// Get a slice of a complete row
-    pub fn get_row(&self, row: usize) -> Option<&[T]> {
-        if row >= self.height {
+    fn get_row_slice(&self, row: usize, span: MemSpan) -> Option<&[T]> {
+        let min_col: usize = span.min;
+        let max_col: usize = MemSpan::max(&span);
+
+        if row >= self.row_count() || max_col >= self.column_count() {
             return None;
         }
 
-        let start = row * self.width;
-        let end = start + self.width;
-        Some(&self.items[start..end])
-    }
-
-    pub fn get_row_slice(&self, row: usize, min_col: usize, max_col: usize) -> Option<&[T]> {
-        if row >= self.height || max_col >= self.width || max_col < min_col {
-            return None;
-        }
-
-        let start = row * self.width + min_col;
-        let end = row * self.width + max_col + 1;
+        let start = row * self.column_count() + min_col;
+        let end = row * self.column_count() + max_col + 1;
 
         Some(&self.items[start..end])
     }
 
     /// Get a mutable slice of a complete row
     pub fn get_row_mut(&mut self, row: usize) -> Option<&mut [T]> {
-        if row >= self.height {
+        if row >= self.row_count() {
             return None;
         }
 
-        let start = row * self.width;
-        let end = start + self.width;
+        let start = row * self.column_count();
+        let end = start + self.column_count();
         Some(&mut self.items[start..end])
     }
 
-    pub fn get_row_slice_mut(&mut self, row: usize, min_col: usize, max_col: usize) -> Option<&mut [T]> {
-        if row >= self.height || max_col >= self.width || max_col < min_col {
+    pub fn get_row_slice_mut(&mut self, row: usize, span: MemSpan) -> Option<&mut [T]> {
+
+        if span.len() == 0 {
             return None;
         }
 
-        let start = row * self.width + min_col;
-        let end = row * self.width + max_col + 1;
-        Some(&mut self.items[start..end])
+        if row >= self.row_count() {
+            return None;
+        }
+
+        let min_col: usize = span.min;
+        let max_col: usize = MemSpan::max(&span);
+
+        let start = row * self.column_count() + min_col;
+        let end = row * self.column_count() + max_col;
+        Some(&mut self.items[start..=end])
     }
 
     /// Get a 1D slice view of a rectangular region
-    pub fn get_slice(&self, min_row: usize, min_col: usize, max_row: usize, max_col: usize) -> Option<Vec2DSlice<T>> {
-        if min_row > max_row || min_col > max_col ||
-            max_row >= self.height || max_col >= self.width {
+    pub fn get_slice(&self, span2d: MemSpan2D) -> Option<Vec2DSlice<T>> {
+
+        let min_row: usize = span2d.min_row();
+        let max_row: usize = span2d.max_row();
+
+        if max_row >= self.row_count() {
             return None;
         }
 
-        let mut row_slices = Vec::new();
+        let mut row_slices = Vec::with_capacity(max_row - min_row + 1);
         for row in min_row..=max_row {
-            if let Some(row_slice) = self.get_row_slice(row, min_col, max_col) {
+            if let Some(row_slice) = self.get_row_slice(row, span2d.col_span) {
                 row_slices.push(row_slice);
             } else {
                 return None;
             }
         }
 
+        let size: Size2D = Size2D::new(span2d.row_span.len(), span2d.column_count());
+
         Some(Vec2DSlice {
             row_slices,
-            width: max_col - min_col + 1,
-            height: max_row - min_row + 1
+            size
         })
     }
 
-    pub fn get_slice_mut(&mut self, min_row: usize, min_col: usize, max_row: usize, max_col: usize) -> Option<Vec2DMutSlice<T>> {
-        if min_row > max_row || min_col > max_col ||
-            max_row >= self.height || max_col >= self.width {
+
+    //TODO: Can we make an unsafe variant of this, to allow the non overlapping chunks mut to use the same pointer logic...
+    pub fn get_slice_mut(&'_ mut self, span2d: MemSpan2D) -> Option<Vec2DMutSlice<'_, T>> {
+        if span2d.area() == 0 {
             return None;
         }
 
-        let mut row_slices: Vec<*mut [T]> = Vec::new();
-        for row in min_row..=max_row {
-            if let Some(row_slice) = self.get_row_slice_mut(row, min_col, max_col) {
-                row_slices.push(row_slice as *mut [T]);
-            } else {
+        let min_index2d: MemIndex2D = span2d.min_index2d();
+        let max_index2d: MemIndex2D = span2d.max_index2d();
+
+        let min_index: usize = self.index2d_to_index(min_index2d)?;
+        let max_index: usize = self.index2d_to_index(max_index2d)?;
+
+        let mut slice  = self.items[min_index..=max_index].as_mut_ptr();
+        let mut row_slices: Vec<&mut [T]> = Vec::with_capacity(max_index2d.row - min_index2d.row + 1);
+        let col_length: usize = span2d.col_span.len();
+
+        for row in span2d.row_span.into_iter() {
+            if row != min_index2d.row { unsafe { slice = slice.add(min_index2d.col); } } //shift to start of row slice
+
+            let cur_slice: &mut [T] = unsafe {slice::from_raw_parts_mut(slice, col_length)};
+        row_slices.push(cur_slice);
+
+            if row != max_index2d.row { unsafe { slice = slice.add(self.column_count() - max_index2d.col + 1); } } //shift to end of row
+        }
+
+        let size: Size2D = Size2D::new(span2d.row_span.len(), span2d.column_count());
+        Some(Vec2DMutSlice
+        {
+            rows: row_slices,
+            size
+        })
+    }
+
+    fn spans_overlap_or_invalid(spans: &Vec<MemSpan2D>) -> bool
+    {
+        for i in 0..spans.len()
+        {
+            if spans[i].area() == 0
+            {
+                return true;
+            }
+
+            for j in 0..spans.len()
+            {
+                if i == j
+                {
+                    continue;
+                }
+
+                if spans[i].overlaps(&spans[j])
+                {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
+    pub fn get_non_overlapping_chunks(&'_ self, spans: Vec<MemSpan2D>) -> Option<Vec<Vec2DSlice<'_, T>>> {
+
+        if Self::spans_overlap_or_invalid(&spans)
+        {
+            return None;
+        }
+
+        let mut chunks: Vec<Vec2DSlice<T>> = Vec::with_capacity(spans.len());
+        for span in spans
+        {
+            if let Some(slice) = self.get_slice(span)
+            {
+                chunks.push(slice);
+            }
+            else
+            {
+                return None; //out of bounds
+            }
+        }
+
+        return Some(chunks);
+    }
+
+    pub fn get_non_overlapping_chunks_mut(&'_ mut self, mut spans: Vec<MemSpan2D>) -> Option<Vec<Vec2DMutSlice<'_, T>>> {
+        if Self::spans_overlap_or_invalid(&spans)
+        {
+            return None;
+        }
+        spans.sort_by_key(|span| span.min_index2d());
+
+        // Validate all spans are within bounds
+        for span in &spans {
+            let min_idx = span.min_index2d();
+            let max_idx = span.max_index2d();
+            if !self.index2d_in_bounds(&min_idx) || !self.index2d_in_bounds(&max_idx) {
                 return None;
             }
         }
 
-        Some(Vec2DMutSlice {
-            rows: row_slices,
-            width: max_col - min_col + 1,
-            height: max_row - min_row + 1,
-            _marker: std::marker::PhantomData,
-        })
+        // Use raw pointers to create non-overlapping slices
+        let base_ptr = self.items.as_mut_ptr();
+        let mut result = Vec::with_capacity(spans.len());
+
+        for span in &spans {
+            let mut rows = Vec::with_capacity(span.row_span.len());
+
+            for row in span.row_span.clone() {
+                let start_idx = self.index2d_to_index(MemIndex2D { row, col: span.col_span.min })?;
+                let len = span.col_span.len();
+
+                unsafe {
+                    let slice_ptr = base_ptr.add(start_idx);
+                    let slice = std::slice::from_raw_parts_mut(slice_ptr, len);
+                    rows.push(slice);
+                }
+            }
+
+            let size: Size2D = Size2D::new(span.row_span.len(), span.column_count());
+            result.push(Vec2DMutSlice {
+                rows,
+                size
+            });
+        }
+
+        Some(result)
+    }
+
+}
+
+pub struct Vec2DMutSlice<'a, T> {
+    rows: Vec<&'a mut [T]>,
+    pub size: Size2D
+}
+
+impl<'a, T> HasSize2D for Vec2DMutSlice<'a, T> {
+    fn row_count(&self) -> usize {
+        self.size.row_count
+    }
+
+    fn column_count(&self) -> usize {
+        self.size.column_count
+    }
+
+    fn size(&self) -> Size2D {
+        self.size
     }
 }
 
-pub struct Vec2DMutSlice<'a, T: 'a> {
-    /// # Safety
-    /// This slice pointer must point at a valid region of `T` with at least length `v.len()`. Normally,
-    /// those requirements would mean that we could instead use a `&mut [T]` here, but we cannot
-    /// because `__iterator_get_unchecked` needs to return `&mut [T]`, which guarantees certain aliasing
-    /// properties that we cannot uphold if we hold on to the full original `&mut [T]`. Wrapping a raw
-    /// slice instead lets us hand out non-overlapping `&mut [T]` subslices of the slice we wrap.
-    rows: Vec<*mut [T]>,
-    width: usize,
-    height: usize,
-    _marker: std::marker::PhantomData<&'a mut T>,
-}
-
-impl<'a, T> HasMemExtents2D for Vec2DMutSlice<'a, T>
-{
-    fn width(&self) -> usize {
-        self.width
-    }
-
-    fn height(&self) -> usize {
-        self.height
-    }
-}
 
 impl<'a, T> Vec2DMethods<T> for Vec2DMutSlice<'a, T> {
-    fn len(&self) -> usize {
-        self.width * self.height
-    }
 
     fn get_index2d(&self, coordinates: MemIndex2D) -> Option<&T> {
         self.get(coordinates.row, coordinates.col)
+    }
+
+    fn get_row(&self, row: usize) -> Option<&[T]> {
+        if row >= self.row_count() {
+            return None;
+        }
+
+        Some(&*self.rows[row])
     }
 }
 
@@ -342,48 +435,43 @@ impl<'a, T> MutVec2DMethods<T> for Vec2DMutSlice<'a, T> {
 }
 
 impl<'a, T> Vec2DMutSlice<'a, T> {
-    /// Get the width of this 2D slice
-    pub fn width(&self) -> usize {
-        self.width
-    }
 
-    /// Get the height of this 2D slice
-    pub fn height(&self) -> usize {
-        self.height
+    unsafe fn get_row_unchecked(&self, row: usize) -> &[T] {
+        &*self.rows[row]
     }
 
     /// Get a reference to an element at slice-relative coordinates
     /// # Safety
     /// Caller must ensure that row and col are within bounds
-    pub unsafe fn get_unchecked(&self, row: usize, col: usize) -> &T {
-        let row_ptr = self.rows[row];
+    unsafe fn get_unchecked(&self, row: usize, col: usize) -> &T {
+        let row_ptr = self.rows.get_unchecked(row);
         &*(*row_ptr).as_ptr().add(col)
     }
 
-    /// Get a mutable reference to an element at slice-relative coordinates
-    /// # Safety
-    /// Caller must ensure that row and col are within bounds and that no other
-    /// mutable references to the same element exist
-    pub unsafe fn get_unchecked_mut(&self, row: usize, col: usize) -> &mut T {
-        let row_ptr = self.rows[row];
-        &mut *(*row_ptr).as_mut_ptr().add(col)
-    }
+    // /// Get a mutable reference to an element at slice-relative coordinates
+    // /// # Safety
+    // /// Caller must ensure that row and col are within bounds and that no other
+    // /// mutable references to the same element exist
+    // unsafe fn get_unchecked_mut(&self, row: usize, col: usize) -> &mut T {
+    //     let row_ptr = self.rows.get_unchecked(row);
+    //     &mut *(*row_ptr).as_mut_ptr().add(col)
+    // }
 
     /// Get a reference to an element at slice-relative coordinates (bounds checked)
     pub fn get(&self, row: usize, col: usize) -> Option<&T> {
-        if row >= self.height || col >= self.width {
+        if row >= self.row_count() || col >= self.column_count() {
             return None;
         }
         Some(unsafe { self.get_unchecked(row, col) })
     }
 
-    /// Get a mutable reference to an element at slice-relative coordinates (bounds checked)
-    pub fn get_mut(&self, row: usize, col: usize) -> Option<&mut T> {
-        if row >= self.height || col >= self.width {
-            return None;
-        }
-        Some(unsafe { self.get_unchecked_mut(row, col) })
-    }
+    // /// Get a mutable reference to an element at slice-relative coordinates (bounds checked)
+    // pub fn get_mut(&self, row: usize, col: usize) -> Option<&mut T> {
+    //     if row >= self.row_count || col >= self.column_count {
+    //         return None;
+    //     }
+    //     Some(unsafe { self.get_unchecked_mut(row, col) })
+    // }
 
     /// Get a mutable slice for an entire row
     /// # Safety
@@ -395,7 +483,7 @@ impl<'a, T> Vec2DMutSlice<'a, T> {
 
     /// Get a mutable slice for an entire row (bounds checked)
     pub fn get_row_mut(&mut self, row: usize) -> Option<&mut [T]> {
-        if row >= self.height {
+        if row >= self.row_count() {
             return None;
         }
         Some(unsafe { self.get_row_unchecked_mut(row) })
@@ -403,7 +491,7 @@ impl<'a, T> Vec2DMutSlice<'a, T> {
 
     /// Get an immutable slice for an entire row
     pub fn get_row(&self, row: usize) -> Option<&[T]> {
-        if row >= self.height {
+        if row >= self.row_count() {
             return None;
         }
         Some(unsafe { &*self.rows[row] })
@@ -414,7 +502,7 @@ impl<'a, T> Vec2DMutSlice<'a, T> {
     where
         T: Clone,
     {
-        for row in 0..self.height {
+        for row in 0..self.row_count() {
             if let Some(row_slice) = self.get_row_mut(row) {
                 row_slice.fill(value.clone());
             }
@@ -426,7 +514,7 @@ impl<'a, T> Vec2DMutSlice<'a, T> {
     where
         F: FnMut(&mut T),
     {
-        for row in 0..self.height {
+        for row in 0..self.row_count() {
             if let Some(row_slice) = self.get_row_mut(row) {
                 for element in row_slice.iter_mut() {
                     f(element);
@@ -444,29 +532,19 @@ impl<'a, T> Vec2DMutSlice<'a, T> {
         }
     }
 
-    /// Create a mutable iterator over all elements (row by row)
-    pub fn iter_mut(&self) -> Vec2DMutSliceIterMut<T> {
-        Vec2DMutSliceIterMut {
-            slice: self,
-            current_row: 0,
-            current_col: 0,
-        }
-    }
-
     /// Copy data to a new Vec2D
     pub fn to_vec2d(&self) -> Vec2D<T>
     where
         T: Clone,
     {
-        let mut items = Vec::with_capacity(self.width * self.height);
-        for row in 0..self.height {
+        let mut items = Vec::with_capacity(self.len());
+        for row in 0..self.row_count() {
             if let Some(row_slice) = self.get_row(row) {
                 items.extend_from_slice(row_slice);
             }
         }
         Vec2D {
-            width: self.width,
-            height: self.height,
+            size: self.size,
             items,
         }
     }
@@ -482,14 +560,14 @@ impl<'a, T> Iterator for Vec2DMutSliceIter<'a, T> {
     type Item = &'a T;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.current_row >= self.slice.height {
+        if self.current_row >= self.slice.row_count() {
             return None;
         }
 
         let result = self.slice.get(self.current_row, self.current_col);
 
         self.current_col += 1;
-        if self.current_col >= self.slice.width {
+        if self.current_col >= self.slice.column_count() {
             self.current_col = 0;
             self.current_row += 1;
         }
@@ -498,62 +576,70 @@ impl<'a, T> Iterator for Vec2DMutSliceIter<'a, T> {
     }
 }
 
-pub struct Vec2DMutSliceIterMut<'a, T> {
-    slice: &'a Vec2DMutSlice<'a, T>,
+pub struct Vec2DMutSliceIterMut<'a, T: 'a> {
+    slice: Vec<&'a mut [T]>,
     current_row: usize,
     current_col: usize,
+    column_count: usize
 }
 
 impl<'a, T> Iterator for Vec2DMutSliceIterMut<'a, T> {
     type Item = &'a mut T;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.current_row >= self.slice.height {
+        if self.current_row >= self.slice.len() {
             return None;
         }
 
-        let result = unsafe {
-            // Safety: We ensure we never return the same mutable reference twice
-            // by advancing our position after each call
-            self.slice.get_unchecked_mut(self.current_row, self.current_col)
-        };
+        let result = Some(unsafe {&mut *((*self.slice[self.current_row]).as_mut_ptr().add(self.current_col))});
 
         self.current_col += 1;
-        if self.current_col >= self.slice.width {
+        if self.current_col >= self.column_count {
             self.current_col = 0;
             self.current_row += 1;
         }
 
-        Some(result)
+        result
     }
 }
 
 /// A 2D slice view that contains a vector of row slices
 pub struct Vec2DSlice<'a, T> {
     row_slices: Vec<&'a [T]>,
-    width: usize,
-    height: usize,
+    pub size: Size2D
+}
+
+impl<'a,T> HasSize2D for Vec2DSlice<'a, T> {
+
+    #[inline]
+    fn row_count(&self) -> usize {
+        self.size.row_count
+    }
+
+    #[inline]
+    fn column_count(&self) -> usize {
+        self.size.column_count
+    }
+
+    #[inline]
+    fn size(&self) -> Size2D {
+        self.size
+    }
 }
 
 impl<'a, T> Vec2DSlice<'a, T> {
-    /// Get the width of this 2D slice
-    pub fn width(&self) -> usize {
-        self.width
+
+    pub fn get(&self, row: usize, column: usize) -> Option<&'a T>
+    {
+        self.get_index2d(MemIndex2D::new(row, column))
     }
 
-    /// Get the height of this 2D slice
-    pub fn height(&self) -> usize {
-        self.height
-    }
-
-    /// Get a reference to an element at slice-relative coordinates
-    /// (0, 0) refers to the top-left corner of the slice
-    pub fn get(&self, row: usize, col: usize) -> Option<&T> {
-        if row >= self.height() || col >= self.width() {
+    pub fn get_index2d(&self, index2d: MemIndex2D) -> Option<&'a T> {
+        if !self.index2d_in_bounds(&index2d) {
             return None;
         }
 
-        self.row_slices.get(row)?.get(col)
+        self.row_slices.get(index2d.row)?.get(index2d.col)
     }
 
     /// Get the element at slice-relative coordinates, panicking if out of bounds
@@ -563,7 +649,7 @@ impl<'a, T> Vec2DSlice<'a, T> {
 
     /// Get a complete row slice within the 2D slice bounds
     pub fn get_row(&self, row: usize) -> Option<&[T]> {
-        if row >= self.height() {
+        if row >= self.row_count() {
             return None;
         }
 
@@ -581,7 +667,7 @@ impl<'a, T> Vec2DSlice<'a, T> {
 
     /// Iterator over all rows in the 2D slice
     pub fn rows(&self) -> impl Iterator<Item = &[T]> {
-        (0..self.height()).map(move |row| self.get_row(row).unwrap())
+        (0..self.row_count()).map(move |row| self.get_row(row).unwrap())
     }
 
     /// Collect all elements into a Vec (row by row order)
@@ -598,8 +684,7 @@ impl<'a, T> Vec2DSlice<'a, T> {
         T: Clone,
     {
         Vec2D {
-            width: self.width(),
-            height: self.height(),
+            size: self.size,
             items: self.to_vec(),
         }
     }
@@ -632,7 +717,7 @@ impl<'a, T> Iterator for Vec2DSliceIter<'a, T> {
     type Item = &'a T;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.current_row >= self.slice.height() {
+        if self.current_row >= self.slice.row_count() {
             return None;
         }
 
@@ -640,7 +725,7 @@ impl<'a, T> Iterator for Vec2DSliceIter<'a, T> {
 
         // Move to next position
         self.current_col += 1;
-        if self.current_col >= self.slice.width() {
+        if self.current_col >= self.slice.column_count() {
             self.current_col = 0;
             self.current_row += 1;
         }
@@ -699,7 +784,7 @@ mod tests {
         // [ 8,   9,  10,  11]
         // [12,  13,  14,  15]
 
-        let row = vec2d.get_row_slice(1, 1, 2);
+        let row = vec2d.get_row_slice(1, MemSpan::lower_bound_upper_bound(1, 3).unwrap());
         let expected_row = [5, 6];
         assert_eq!(row, Some(expected_row.as_slice()));
     }
@@ -715,7 +800,7 @@ mod tests {
         // [ 8,   9,  10,  11]
         // [12,  13,  14,  15]
 
-        let row = vec2d.get_row_slice_mut(1, 1, 2).unwrap();
+        let row = vec2d.get_row_slice_mut(1, MemSpan::lower_bound_upper_bound(1, 3).unwrap()).unwrap();
         let expected_row = [5, 6];
         assert_eq!(row, expected_row.as_slice());
     }
@@ -733,10 +818,10 @@ mod tests {
         // [12, 13, 14, 15]
 
         // Get a 2x2 slice from the center
-        let slice = vec2d.get_slice(1, 1, 2, 2).unwrap();
+        let slice = vec2d.get_slice(MemSpan2D::new_from_usize(1, 1, 3, 3)).unwrap();
 
-        assert_eq!(slice.width(), 2);
-        assert_eq!(slice.height(), 2);
+        assert_eq!(slice.column_count(), 2);
+        assert_eq!(slice.row_count(), 2);
 
         // Test element access
         assert_eq!(slice.get(0, 0), Some(&5));
@@ -771,10 +856,10 @@ mod tests {
         // [12, 13, 14, 15]
 
         // Get a 2x2 slice from the center
-        let slice = vec2d.get_slice_mut(1, 1, 2, 2).unwrap();
+        let slice = vec2d.get_slice_mut(MemSpan2D::new_from_usize(1, 1, 3, 3)).unwrap();
 
-        assert_eq!(slice.width(), 2);
-        assert_eq!(slice.height(), 2);
+        assert_eq!(slice.column_count(), 2);
+        assert_eq!(slice.row_count(), 2);
 
         // Test element access
         assert_eq!(slice.get(0, 0), Some(&5));
@@ -799,7 +884,7 @@ mod tests {
     #[test]
     fn test_slice_edge_cases() {
         let items: Vec<i32> = (0..12).collect();
-        let vec2d = Vec2D::new(items, 3, 4); // 3x4 grid
+        let vec2d = Vec2D::new_items_rows_columns(items, 4, 3).unwrap(); // 3x4 grid
 
         //grid looks like:
         // [0, 1, 2]
@@ -808,28 +893,28 @@ mod tests {
         // [9,10,11]
 
         // Single element slice
-        let mut slice = vec2d.get_slice(1, 1, 1, 1).unwrap();
-        assert_eq!(slice.width(), 1);
-        assert_eq!(slice.height(), 1);
+        let mut slice = vec2d.get_slice(MemSpan2D::new_from_usize(1, 1, 2, 2)).unwrap();
+        assert_eq!(slice.column_count(), 1);
+        assert_eq!(slice.row_count(), 1);
         assert_eq!(slice.get(0, 0), Some(&4));
 
         assert_eq!([6,7,8].as_slice(), vec2d.get_row(2).unwrap());
 
         // Full row slice
-        slice = vec2d.get_slice(2, 0, 2, 2).unwrap();
-        assert_eq!(slice.width(), 3);
-        assert_eq!(slice.height(), 1);
+        slice = vec2d.get_slice(MemSpan2D::new_from_usize(2, 0, 3, 3)).unwrap();
+        assert_eq!(slice.column_count(), 3);
+        assert_eq!(slice.row_count(), 1);
         assert_eq!(slice.get_row(0), Some([6, 7, 8].as_slice()));
 
         // Invalid bounds should return None
-        assert!(vec2d.get_slice(0, 0, 5, 5).is_none());
-        assert!(vec2d.get_slice(2, 1, 1, 1).is_none()); // min > max
+        assert!(vec2d.get_slice(MemSpan2D::new_from_usize(0, 0, 5, 5)).is_none());
+        assert!(vec2d.get_slice(MemSpan2D::new_from_usize( 2, 1, 1, 1)).is_none()); // min > max
     }
 
     #[test]
     fn test_slice_edge_cases_mut() {
         let items: Vec<i32> = (0..12).collect();
-        let mut vec2d = Vec2D::new(items, 3, 4); // 3x4 grid
+        let mut vec2d = Vec2D::new_items_rows_columns(items, 4, 3).unwrap(); // 3x4 grid
 
         //grid looks like:
         // [0, 1, 2]
@@ -838,22 +923,22 @@ mod tests {
         // [9,10,11]
 
         // Single element slice
-        let mut slice = vec2d.get_slice_mut(1, 1, 1, 1).unwrap();
-        assert_eq!(slice.width(), 1);
-        assert_eq!(slice.height(), 1);
+        let mut slice = vec2d.get_slice_mut(MemSpan2D::new_from_usize(1, 1, 2, 2)).unwrap();
+        assert_eq!(slice.column_count(), 1);
+        assert_eq!(slice.row_count(), 1);
         assert_eq!(slice.get(0, 0), Some(&4));
 
         assert_eq!([6, 7, 8].as_slice(), vec2d.get_row(2).unwrap());
 
         // Full row slice
-        slice = vec2d.get_slice_mut(2, 0, 2, 2).unwrap();
-        assert_eq!(slice.width(), 3);
-        assert_eq!(slice.height(), 1);
+        slice = vec2d.get_slice_mut(MemSpan2D::new_from_usize(2, 0, 3, 3)).unwrap();
+        assert_eq!(slice.column_count(), 3);
+        assert_eq!(slice.row_count(), 1);
         assert_eq!(slice.get_row(0), Some([6, 7, 8].as_slice()));
 
         // Invalid bounds should return None
-        assert!(vec2d.get_slice(0, 0, 5, 5).is_none());
-        assert!(vec2d.get_slice(2, 1, 1, 1).is_none()); // min > max
+        assert!(vec2d.get_slice_mut(MemSpan2D::new_from_usize(0, 0, 5, 5)).is_none());
+        assert!(vec2d.get_slice_mut(MemSpan2D::new_from_usize(2, 1, 1, 1)).is_none()); // min > max
     }
 
 
@@ -862,7 +947,7 @@ mod tests {
         let items: Vec<i32> = (1..=9).collect();
         let vec2d = Vec2D::from_vec(items, 3).unwrap(); // 3x3 grid with values 1-9
 
-        let slice = vec2d.get_slice(0, 0, 1, 1).unwrap(); // 2x2 top-left corner
+        let slice = vec2d.get_slice(MemSpan2D::new_from_usize(0, 0, 2, 2)).unwrap(); // 2x2 top-left corner
 
         assert_eq!([1, 2].as_slice(), slice.get_row(0).unwrap());
         assert_eq!([4, 5].as_slice(), slice.get_row(1).unwrap());
@@ -880,6 +965,104 @@ mod tests {
             .map(|row| row.iter().sum())
             .collect();
         assert_eq!(row_sums, vec![3, 9]); // [1+2, 4+5]
+    }
+
+    #[test]
+    fn test_non_overlapping_chunks_overlap()
+    {
+        let items: Vec<i32> = (1..=9).collect();
+        let vec2d = Vec2D::from_vec(items, 3).unwrap();
+
+        let ranges: Vec<MemSpan2D> = vec![
+            {MemSpan2D::new_from_usize(0, 0, 2, 2)},
+            {MemSpan2D::new_from_usize(1, 1, 2, 2)}];
+
+        let chunks = vec2d.get_non_overlapping_chunks(ranges);
+        assert!(chunks.is_none(), "Expected non, provided spans overlap");
+    }
+
+    #[test]
+    fn test_non_overlapping_chunks_no_overlap()
+    {
+        let items: Vec<i32> = (1..=9).collect();
+        let vec2d = Vec2D::from_vec(items, 3).unwrap();
+
+        let mut ranges: Vec<MemSpan2D> = vec![
+            {MemSpan2D::new_from_usize(0, 0, 1, 2)},
+            {MemSpan2D::new_from_usize(2, 0, 3, 2)}];
+
+        let mut chunks = vec2d.get_non_overlapping_chunks(ranges);
+        assert!(chunks.is_some(), "Expected some, provided spans do not overlap");
+        let mut chunks_unwrap = chunks.unwrap();
+
+        let mut chunk_0 = chunks_unwrap[0].iter().map(|i| i.clone()).collect::<Vec<i32>>();
+        let mut chunk_1 = chunks_unwrap[1].iter().map(|i| i.clone()).collect::<Vec<i32>>();
+
+        assert_eq!(chunk_0, vec![1, 2]);
+        assert_eq!(chunk_1, vec![7, 8]);
+
+        ranges = vec![
+            {MemSpan2D::new_from_usize(0, 0, 1, 3)},
+            {MemSpan2D::new_from_usize(1, 0, 2, 3)}];
+
+        chunks = vec2d.get_non_overlapping_chunks(ranges);
+        assert!(chunks.is_some(), "Expected some, provided spans do not overlap");
+
+        chunks_unwrap = chunks.unwrap();
+        chunk_0 = chunks_unwrap[0].iter().map(|i| i.clone()).collect::<Vec<i32>>();
+        chunk_1 = chunks_unwrap[1].iter().map(|i| i.clone()).collect::<Vec<i32>>();
+
+        assert_eq!(chunk_0, vec![1, 2, 3]);
+        assert_eq!(chunk_1, vec![4, 5, 6]);
+    }
+
+    #[test]
+    fn test_mut_non_overlapping_chunks_overlap()
+    {
+        let items: Vec<i32> = (1..=9).collect();
+        let mut vec2d = Vec2D::from_vec(items, 3).unwrap();
+
+        let ranges: Vec<MemSpan2D> = vec![
+            {MemSpan2D::new_from_usize(0, 0, 2, 2)},
+            {MemSpan2D::new_from_usize(1, 1, 2, 2)}];
+
+        let chunks = vec2d.get_non_overlapping_chunks_mut(ranges);
+        assert!(chunks.is_none(), "Expected non, provided spans overlap");
+    }
+
+    #[test]
+    fn test_mut_non_overlapping_chunks_no_overlap()
+    {
+        let items: Vec<i32> = (1..=9).collect();
+        let mut vec2d = Vec2D::from_vec(items, 3).unwrap();
+
+        let mut ranges: Vec<MemSpan2D> = vec![
+            {MemSpan2D::new_from_usize(0, 0, 1, 2)},
+            {MemSpan2D::new_from_usize(2, 0, 3, 2)}];
+
+        let mut chunks = vec2d.get_non_overlapping_chunks_mut(ranges);
+        assert!(chunks.is_some(), "Expected some, provided spans do not overlap");
+        let mut chunks_unwrap = chunks.unwrap();
+
+        let mut chunk_0 = chunks_unwrap[0].iter().map(|i| i.clone()).collect::<Vec<i32>>();
+        let mut chunk_1 = chunks_unwrap[1].iter().map(|i| i.clone()).collect::<Vec<i32>>();
+
+        assert_eq!(chunk_0, vec![1, 2]);
+        assert_eq!(chunk_1, vec![7, 8]);
+
+        ranges = vec![
+            {MemSpan2D::new_from_usize(0, 0, 1, 3)},
+            {MemSpan2D::new_from_usize(1, 0, 2, 3)}];
+
+        chunks = vec2d.get_non_overlapping_chunks_mut(ranges);
+        assert!(chunks.is_some(), "Expected some, provided spans do not overlap");
+
+        chunks_unwrap = chunks.unwrap();
+        chunk_0 = chunks_unwrap[0].iter().map(|i| i.clone()).collect::<Vec<i32>>();
+        chunk_1 = chunks_unwrap[1].iter().map(|i| i.clone()).collect::<Vec<i32>>();
+
+        assert_eq!(chunk_0, vec![1, 2, 3]);
+        assert_eq!(chunk_1, vec![4, 5, 6]);
     }
 }
 

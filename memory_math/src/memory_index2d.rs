@@ -1,11 +1,8 @@
 use std::num::TryFromIntError;
 use std::ops::Sub;
 use std::{fmt, ops::Add};
-
-use super::memory_vect2d::MemVect2D;
-use super::offset_coordinate::OffsetCoordinate2D;
-use super::offset_vect2d::OffsetVect2D;
-use super::offset::Offset;
+use std::cmp::Ordering;
+use super::memory_offset2d::MemOffset2D;
 
 #[derive(Copy, Clone)]
 pub struct MemIndex2D
@@ -34,75 +31,53 @@ impl PartialEq for MemIndex2D{
     }
 }
 
+impl Eq for MemIndex2D{}
+
 impl PartialOrd for MemIndex2D{
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
 
-        let row_compare = self.row.partial_cmp(&other.row).unwrap(); //usize comparison always exists
-
-        match row_compare
+        let col_compare = self.col.cmp(&other.col);
+        if col_compare != Ordering::Equal
         {
-            std::cmp::Ordering::Less => Some(std::cmp::Ordering::Less),
-            std::cmp::Ordering::Equal => self.col.partial_cmp(&other.col),
-            std::cmp::Ordering::Greater => Some(std::cmp::Ordering::Greater)
+            return Some(col_compare);
         }
+        
+        return self.row.partial_cmp(&other.row);
     }
 }
 
-impl Add<MemVect2D> for MemIndex2D{
-    type Output = MemIndex2D;
-
-    fn add(self, rhs: MemVect2D) -> Self::Output{
-        MemIndex2D
-        {
-            row: self.row + rhs.row,
-            col: self.col + rhs.col
-        }
+impl Ord for MemIndex2D{
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.partial_cmp(other).unwrap()
     }
 }
 
-
-
-impl TryFrom<OffsetCoordinate2D> for MemIndex2D
+impl TryFrom<MemOffset2D> for MemIndex2D
 {
     type Error = &'static str;
 
-    fn try_from(value: OffsetCoordinate2D) -> Result<Self, Self::Error> {
-        match (value.row, value.col)
-        {
-            (Offset::Pos(r_val), Offset::Pos(c_val)) => Ok(MemIndex2D::new(r_val, c_val)),
-            _ => Err("row and col must be positive")
-        }
-    }
-}
+    fn try_from(value: MemOffset2D) -> Result<Self, Self::Error> {
 
-impl From<MemVect2D> for MemIndex2D{
-    fn from(value: MemVect2D) -> Self {
-        MemIndex2D{
-            row: value.row, 
-            col: value.col
+        if value.row < 0 || value.col < 0
+        {
+            return Err("MemOffset2D must be positive");
         }
+
+        Ok(MemIndex2D::new(value.row as usize, value.col as usize))
     }
 }
 
 impl Sub for MemIndex2D{
-    type Output = OffsetVect2D;
+    type Output = MemOffset2D;
 
     fn sub(self, rhs: Self) -> Self::Output {
-        OffsetVect2D::from(self) - OffsetVect2D::from(rhs)
+        let row: isize = self.row as isize - rhs.row as isize;
+        let col: isize = self.col as isize - rhs.col as isize;
+
+        MemOffset2D::new(row, col)
     }
 }
 
-impl Sub<MemVect2D> for MemIndex2D{
-    type Output = Option<Self>;
-
-    fn sub(self, rhs: MemVect2D) -> Self::Output{
-        match MemVect2D::from(self) - rhs
-        {
-            Some(v_val) => Some(Self::from(v_val)),
-            None => None
-        }
-    }
-}
 
 impl TryFrom<(f32, f32)> for MemIndex2D
 {
@@ -172,33 +147,30 @@ impl TryFrom<(i32, i32)> for MemIndex2D
 
 ///Attempt to add a MemIndex2D with an OffsetVect2D, if possible.
 /// This is possible only if the OffsetVect2D lies entriely within the first quadrant,
-/// which then proceeds to act like addition with a MemVect2D. 
+/// which then proceeds to act like addition with a MemVect2D.
 /// return None if impossible.
-impl Add<OffsetVect2D> for MemIndex2D{
+impl Add<MemOffset2D> for MemIndex2D{
     type Output = Option<MemIndex2D>;
 
-    fn add(self, rhs: OffsetVect2D) -> Self::Output {
-        match(rhs.row + self.row, rhs.col + self.col)
-        {
-            (Offset::Pos(r), Offset::Pos(c)) =>
-            {
-                Some(MemIndex2D::new(r, c))
-            }
-            _ => None
-        }
+    fn add(self, rhs: MemOffset2D) -> Self::Output {
+
+        let row: usize = self.row.checked_add_signed(rhs.row)?;
+        let col: usize = self.col.checked_add_signed(rhs.col)?;
+
+        Some(MemIndex2D{
+            row,
+            col
+        })
     }
 }
 
-impl Sub<OffsetVect2D> for MemIndex2D
+impl Sub<MemOffset2D> for MemIndex2D
 {
-    type Output = OffsetVect2D;
+    type Output = Option<MemIndex2D>;
 
-    fn sub(self, rhs: OffsetVect2D) -> Self::Output {
-        OffsetVect2D
-        {
-            row: self.row - rhs.row,
-            col: self.col - rhs.col
-        }
+    fn sub(self, rhs: MemOffset2D) -> Self::Output {
+        let flipped = -rhs;
+        self + flipped
     }
 }
 

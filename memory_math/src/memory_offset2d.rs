@@ -1,38 +1,33 @@
-use std::ops::Sub;
+use std::ops::{Neg, Sub};
 
 use super::memory_index2d::MemIndex2D;
 
 
 
-/// In memory space there is a very clear set of comparisons and operations
-/// which may be made, MemoryVect2d (mv) always lie in the first quadrant (x+, y+) and 
-/// always have integer components. so some operations have a much more direct intepretation 
-/// than in the euclidian plane. For example mv_a < mv_b has an exact meaning whereas 
-/// v_a < v_b doesn't neccesarily have an exact meaning and needs a little more context. 
 #[derive(Clone, Copy)]
-pub struct MemVect2D{
-    pub row: usize,
-    pub col: usize
+pub struct MemOffset2D {
+    pub row: isize,
+    pub col: isize
 }
 
-impl From<MemIndex2D> for MemVect2D{
+impl From<MemIndex2D> for MemOffset2D {
     fn from(value: MemIndex2D) -> Self {
-        MemVect2D
+        MemOffset2D
         {
-            row: value.row,
-            col: value.col
+            row: value.row as isize,
+            col: value.col as isize
         }
     }
 }
 
-impl PartialEq for MemVect2D
+impl PartialEq for MemOffset2D
 {
     fn eq(&self, other: &Self) -> bool
     {
         return self.row == other.row && self.col == other.col;
     }
 }
-impl PartialOrd for MemVect2D
+impl PartialOrd for MemOffset2D
 {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         match self.row.partial_cmp(&other.row) {
@@ -43,7 +38,7 @@ impl PartialOrd for MemVect2D
     }
 }
 
-impl Sub for MemVect2D
+impl Sub for MemOffset2D
 {
     type Output = Option<Self>;
 
@@ -61,33 +56,42 @@ impl Sub for MemVect2D
             None => return None
         };
 
-        Some(MemVect2D{row: row_component, col: col_component})
+        Some(MemOffset2D {row: row_component, col: col_component})
     }
 }
 
-impl MemVect2D
+impl Neg for MemOffset2D
 {
-    pub fn new(row: usize, col: usize) -> Self
+    type Output = Self;
+
+    fn neg(self) -> Self::Output {
+        MemOffset2D {row: -self.row, col: -self.col}
+    }
+}
+
+impl MemOffset2D
+{
+    pub fn new(row: isize, col: isize) -> Self
     {
-        MemVect2D
+        MemOffset2D
         {
             row,
             col
         }
     }
 
-    pub fn row_vect(magnitude: usize) -> Self
+    pub fn row_offset(magnitude: isize) -> Self
     {
-        MemVect2D
+        MemOffset2D
         {
             row: magnitude,
             col: 0
         }
     }
 
-    pub fn col_vect(magnitude: usize) -> Self
+    pub fn col_offset(magnitude: isize) -> Self
     {
-        MemVect2D
+        MemOffset2D
         {
             row: 0,
             col: magnitude

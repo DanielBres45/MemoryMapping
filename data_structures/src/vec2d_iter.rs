@@ -1,6 +1,6 @@
 use std::{usize, vec::IntoIter};
 
-use memory_math::{memory_index2d::MemIndex2D, memory_iter::HasCurMemIndex};
+use memory_math::{memory_index2d::MemIndex2D, memory_range_iter::HasCurMemIndex};
 
 pub struct Vec2DIntoIter<T> {
     vec: IntoIter<T>,
