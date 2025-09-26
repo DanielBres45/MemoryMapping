@@ -114,7 +114,7 @@ impl MemSpan2D {
     }
 
     #[inline]
-    pub fn max_column(&self) -> usize
+    pub fn max_column(&self) -> Option<usize>
     {
          MemSpan::max(&self.col_span)
     }
@@ -132,7 +132,7 @@ impl MemSpan2D {
     }
 
     #[inline]
-    pub fn max_row(&self) -> usize
+    pub fn max_row(&self) -> Option<usize>
     {
         MemSpan::max(&self.row_span)
     }
@@ -151,11 +151,11 @@ impl MemSpan2D {
         MemIndex2D::new(min_row, min_col)
     }
 
-    pub fn max_index2d(&self) -> MemIndex2D
+    pub fn max_index2d(&self) -> Option<MemIndex2D>
     {
-        let max_row: usize = self.max_row();
-        let max_col: usize = self.max_column();
-        MemIndex2D::new(max_row, max_col)
+        let max_row: usize = self.max_row()?;
+        let max_col: usize = self.max_column()?;
+        Some(MemIndex2D::new(max_row, max_col))
     }
 
     #[inline]

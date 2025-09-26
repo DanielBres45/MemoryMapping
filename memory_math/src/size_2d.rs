@@ -30,6 +30,16 @@ pub trait HasSize2D
     fn row_count(&self) -> usize;
     fn column_count(&self) -> usize;
 
+    fn max_row(&self) -> Option<usize>
+    {
+        self.row_count().checked_sub(1)
+    }
+    
+    fn max_col(&self) -> Option<usize>
+    {
+        self.column_count().checked_sub(1)
+    }
+    
     #[inline]
     fn size(&self) -> Size2D
     {

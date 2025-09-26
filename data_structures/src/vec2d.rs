@@ -196,7 +196,7 @@ impl<T> Vec2D<T> {
 
     fn get_row_slice(&self, row: usize, span: MemSpan) -> Option<&[T]> {
         let min_col: usize = span.min;
-        let max_col: usize = MemSpan::max(&span);
+        let max_col: usize = MemSpan::max(&span)?;
 
         if row >= self.row_count() || max_col >= self.column_count() {
             return None;
@@ -230,7 +230,7 @@ impl<T> Vec2D<T> {
         }
 
         let min_col: usize = span.min;
-        let max_col: usize = MemSpan::max(&span);
+        let max_col: usize = MemSpan::max(&span)?;
 
         let start = row * self.column_count() + min_col;
         let end = row * self.column_count() + max_col;
@@ -241,7 +241,7 @@ impl<T> Vec2D<T> {
     pub fn get_slice(&self, span2d: MemSpan2D) -> Option<Vec2DSlice<T>> {
 
         let min_row: usize = span2d.min_row();
-        let max_row: usize = span2d.max_row();
+        let max_row: usize = span2d.max_row()?;
 
         if max_row >= self.row_count() {
             return None;
@@ -272,7 +272,7 @@ impl<T> Vec2D<T> {
         }
 
         let min_index2d: MemIndex2D = span2d.min_index2d();
-        let max_index2d: MemIndex2D = span2d.max_index2d();
+        let max_index2d: MemIndex2D = span2d.max_index2d()?;
 
         let min_index: usize = self.index2d_to_index(min_index2d)?;
         let max_index: usize = self.index2d_to_index(max_index2d)?;
@@ -357,7 +357,7 @@ impl<T> Vec2D<T> {
         // Validate all spans are within bounds
         for span in &spans {
             let min_idx = span.min_index2d();
-            let max_idx = span.max_index2d();
+            let max_idx = span.max_index2d()?;
             if !self.index2d_in_bounds(&min_idx) || !self.index2d_in_bounds(&max_idx) {
                 return None;
             }

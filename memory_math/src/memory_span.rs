@@ -19,7 +19,7 @@ impl IntoIterator for MemSpan
     type IntoIter = std::ops::Range<usize>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.min..self.count
+        self.min..self.upper_bound()
     }
 }
 
@@ -59,12 +59,21 @@ impl MemSpan
         self.min
     }
 
-    pub fn max(&self) -> usize
+    pub fn upper_bound(&self) -> usize
     {
-        self.min + self.count - 1
+        self.min + self.count
     }
 
-    pub fn max_value(&self) -> usize
+    pub fn max(&self) -> Option<usize>
+    {
+        if self.count == 0 {
+            return None;
+        }
+
+        Some(self.min + self.count - 1)
+    }
+
+    pub fn max_value(&self) -> Option<usize>
     {
         self.max()
     }
@@ -259,7 +268,9 @@ impl MemSpan
     #[inline]
     pub fn intersect(&self, other: &Self) -> Option<Self>
     {
-        Self::min_max(self.min.max(other.min), self.max().min(other.max()))
+        let this_max: usize = self.max()?;
+        let other_max = other.max_value()?;
+        Self::min_max(self.min.max(other.min), this_max.min(other_max))
     }
     pub fn overlaps(&self, other: &Self) -> bool
     {
@@ -277,7 +288,7 @@ impl PartialEq for MemSpan
 impl Display for MemSpan
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "[{},{})", self.min, self.max())
+        write!(f, "[{},{})", self.min, self.max().unwrap_or(self.min))
     }
 }
 
@@ -294,38 +305,38 @@ mod tests {
     fn test_intersection()
     {
         let mut A = MemSpan::min_max(1, 100).unwrap();
-        assert_eq!(100, MemSpan::max(&A));
+        assert_eq!(100, MemSpan::max(&A).unwrap());
         let mut B = MemSpan::min_max(50, 150).unwrap();
         let mut intersect: MemSpan = A.intersect(&B).unwrap();
         assert_eq!(50, intersect.min);
-        assert_eq!(100, MemSpan::max(&intersect));
+        assert_eq!(100, MemSpan::max(&intersect).unwrap());
 
         A = MemSpan::min_max(1, 100).unwrap();
         B = MemSpan::min_max(1, 100).unwrap();
         intersect = A.intersect(&B).unwrap();
         assert_eq!(1, intersect.min);
-        assert_eq!(100, intersect.max_value());
+        assert_eq!(100, intersect.max_value().unwrap());
 
         intersect = B.intersect(&A).unwrap();
         assert_eq!(1, intersect.min);
-        assert_eq!(100, intersect.max_value());
+        assert_eq!(100, intersect.max_value().unwrap());
 
         A = MemSpan::min_max(50, 75).unwrap();
         B = MemSpan::min_max(1, 100).unwrap();
         intersect = A.intersect(&B).unwrap();
         assert_eq!(50, intersect.min);
-        assert_eq!(75, MemSpan::max(&intersect));
+        assert_eq!(75, MemSpan::max(&intersect).unwrap());
 
 
         intersect = B.intersect(&A).unwrap();
         assert_eq!(50, intersect.min);
-        assert_eq!(75, intersect.max_value());
+        assert_eq!(75, intersect.max_value().unwrap());
 
         A = MemSpan::min_max(50, 100).unwrap();
         B = MemSpan::min_max(1, 75).unwrap();
         intersect = A.intersect(&B).unwrap();
         assert_eq!(50, intersect.min);
-        assert_eq!(75, intersect.max_value());
+        assert_eq!(75, intersect.max_value().unwrap());
 
     }
 }

@@ -15,9 +15,9 @@ impl Iterator for ClockwiseCornerIterator
         let current: Option<MemIndex2D> = match self.corner
         {
             0 => Some(self.extents.min_index2d()),
-            1 => Some(MemIndex2D::new(self.extents.min_row(), self.extents.max_column())),
-            2 => Some(self.extents.max_index2d()),
-            3 => Some(MemIndex2D::new(self.extents.max_row(), self.extents.max_column())),
+            1 => Some(MemIndex2D::new(self.extents.min_row(), self.extents.max_column()?)),
+            2 => Some(self.extents.max_index2d()?),
+            3 => Some(MemIndex2D::new(self.extents.max_row()?, self.extents.max_column()?)),
             _ => None
         };
 
@@ -47,10 +47,10 @@ impl Iterator for LinearMemoryIterator
 
 impl DoubleEndedIterator for LinearMemoryIterator {
     fn next_back(&mut self) -> Option<Self::Item> {
-        let next_col = self.prev_column();
+        let next_col = self.prev_column()?;
         let next_row: usize;
 
-        if next_col == self.extents.max_column() {
+        if next_col == self.extents.max_column()? {
             next_row = self.current_index.row.checked_sub(1)?;
             if next_row < self.extents.row_lower_bound() {
                 return None;
@@ -104,7 +104,7 @@ impl LinearMemoryIterator
         col
     }
 
-    fn prev_column(&mut self) -> usize
+    fn prev_column(&mut self) -> Option<usize>
     {
         let col: usize = self.current_index.col;
         let mut set: bool = false;
@@ -121,9 +121,10 @@ impl LinearMemoryIterator
 
         if !set
         {
-            self.current_index.col = self.extents.max_column();
+            self.current_index.col = self.extents.max_column()?;
         }
-        col
+
+        Some(col)
     }
 
     fn next_row(&mut self) -> Option<usize>
@@ -159,7 +160,7 @@ impl Iterator for BoustrophedonIterator
             return Some(MemIndex2D::new(self.current_index.row, c));
         }
         let row: usize = self.next_row()?;
-        let col: usize = self.range2d.max_column();
+        let col: usize = self.range2d.max_column()?;
         Some(MemIndex2D::new(row, col))
     }
 }
