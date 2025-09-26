@@ -173,12 +173,12 @@ impl MemSpan2D {
         }
     }
 
-    pub fn new_from_index2d(min_index2d: MemIndex2D, max_index2d: MemIndex2D) -> Self
+    pub fn new_from_index2d(min_index2d: MemIndex2D, upper_bound_index2d: MemIndex2D) -> Self
     {
         MemSpan2D
         {
-            row_span: MemSpan::new_range(min_index2d.row..max_index2d.row),
-            col_span: MemSpan::new_range(min_index2d.col..max_index2d.col)
+            row_span: MemSpan::new_range(min_index2d.row..upper_bound_index2d.row),
+            col_span: MemSpan::new_range(min_index2d.col..upper_bound_index2d.col)
         }
     }
 

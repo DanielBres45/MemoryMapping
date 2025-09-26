@@ -1,6 +1,7 @@
 use crate::memory_index2d::MemIndex2D;
 use crate::size_2d::{HasSize2D, Size2D};
 use crate::memory_span2d::MemSpan2D;
+use crate::memory_offset2d::MemOffset2D;
 
 
 pub trait MemoryGrid : HasSize2D
@@ -32,17 +33,23 @@ pub trait MemoryGrid : HasSize2D
         Some(GridIndex::new(row_index, column_index))
     }
     fn index2d_relative_to_grid(&self, cell_index2d: &MemIndex2D, grid_index: &GridIndex) -> Option<MemIndex2D>;
-    fn grid_index_to_index2d(&self, grid_index: &GridIndex) -> Option<MemIndex2D>;
+    fn grid_index_to_index2d(&self, grid_index: &GridIndex) -> Option<MemIndex2D>
+    {
+        let row_index = self.grid_row_index_to_row_index(grid_index.row())?;
+        let column_index = self.grid_column_index_to_column_index(grid_index.col())?;
+
+        Some(MemIndex2D::new(row_index, column_index))
+    }
 
     fn grid_index_span2d(&self, grid_index: &GridIndex) -> Option<MemSpan2D>
     {
         let min_index2d = self.grid_index_to_index2d(grid_index)?;
 
-        let max_row: usize = self.grid_row_index_to_row_index(grid_index.row() + 1).unwrap_or(self.max_row()?);
-        let max_col: usize = self.grid_column_index_to_column_index(grid_index.col() + 1).unwrap_or(self.max_col()?);
+        let upper_row_bound: usize = self.grid_row_index_to_row_index(grid_index.row() + 1).unwrap_or(self.max_row()? + 1);
+        let upper_col_bound: usize = self.grid_column_index_to_column_index(grid_index.col() + 1).unwrap_or(self.max_col()? + 1);
 
-        let max_index2d = MemIndex2D::new(max_row, max_col);
-        Some(MemSpan2D::new_from_index2d(min_index2d, max_index2d))
+        let upper_bound_index2d = MemIndex2D::new(upper_row_bound, upper_col_bound);
+        Some(MemSpan2D::new_from_index2d(min_index2d, upper_bound_index2d))
     }
 
     fn grid_intersections(&self, span2d: &MemSpan2D) -> Option<(GridRange2D, Vec<GridIntersection>)>
@@ -61,7 +68,8 @@ pub trait MemoryGrid : HasSize2D
 
                 if let Some(intersection) = cur_grid_span.intersect(span2d)
                 {
-                    intersections.push(GridIntersection{grid_index, intersection});
+                    let span_in_grid: MemSpan2D = (intersection - MemOffset2D::from(cur_grid_span.min_index2d())).unwrap();
+                    intersections.push(GridIntersection{grid_index, intersection: span_in_grid});
                 }
             }
         }
@@ -77,6 +85,7 @@ pub struct MemGrid2D
     pub column_offset: usize
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub struct GridIndex(pub MemIndex2D);
 
 impl GridIndex
@@ -101,6 +110,7 @@ impl GridIndex
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub struct GridIntersection {
     pub grid_index: GridIndex,
     pub intersection: MemSpan2D,
@@ -189,20 +199,6 @@ impl MemoryGrid for MemGrid2D
         Some(MemIndex2D{row, col})
     }
 
-    fn grid_index_to_index2d(&self, grid_index: &GridIndex) -> Option<MemIndex2D> {
-        if !self.grid_index_in_bounds(&grid_index)
-        {
-            return None;
-        }
-
-        Some(MemIndex2D::new(
-            grid_index.row() * self.row_offset,
-            grid_index.col() * self.column_offset
-        ))
-    }
-
-
-
 }
 
 impl MemGrid2D
@@ -245,12 +241,12 @@ impl MemoryGrid for NonUniformMemGrid2D
 {
     #[inline]
     fn grid_row_count(&self) -> usize {
-        self.row_offsets.len()
+        self.row_offsets.len() + 1
     }
 
     #[inline]
     fn grid_column_count(&self) -> usize {
-        self.column_offsets.len()
+        self.column_offsets.len() + 1
     }
 
     //binary search on row offsets to find the tile row which
@@ -316,24 +312,13 @@ impl MemoryGrid for NonUniformMemGrid2D
 
     fn index2d_relative_to_grid(&self, cell_index2d: &MemIndex2D, grid_index: &GridIndex) -> Option<MemIndex2D>
     {
-        let row_offset: usize = match grid_index.0.row.checked_sub(1) { Some(i) => self.row_offsets[i], None => 0};
-        let column_offset: usize = match grid_index.0.col.checked_sub(1) { Some(i) => self.column_offsets[i], None => 0};
+        let row_offset: usize = self.grid_row_index_to_row_index(grid_index.0.row)?;
+        let column_offset: usize = self.grid_column_index_to_column_index(grid_index.0.col)?;
 
         let row: usize = cell_index2d.row.checked_sub(row_offset)?;
         let col: usize = cell_index2d.col.checked_sub(column_offset)?;
 
         Some(MemIndex2D{row, col})
-    }
-
-    fn grid_index_to_index2d(&self, grid_index: &GridIndex) -> Option<MemIndex2D> {
-        if !self.grid_index_in_bounds(&grid_index)
-        {
-            return None;
-        }
-
-        let row_offset: usize = self.row_offsets[grid_index.0.row];
-        let column_offset: usize = self.column_offsets[grid_index.0.col];
-        Some(MemIndex2D::new(row_offset, column_offset))
     }
 }
 
@@ -405,10 +390,14 @@ mod tests {
         assert_eq!(0, index_relative_to_grid.col);
 
         assert!(grid.index2d_to_grid_index(&MemIndex2D::new(10, 10)).is_none());
+
+        let expected_index_span: MemSpan2D = MemSpan2D::new_from_index2d(MemIndex2D::new(4, 4), MemIndex2D::new(6, 6));
+        let actual_index_span: MemSpan2D = grid.grid_index_span2d(&grid_index).unwrap();
+        assert_eq!(expected_index_span, actual_index_span);
     }
 
     #[test]
-    fn test_grid_intersections_all_grid2d()
+    fn test_grid_intersections_all()
     {
         let size: Size2D = Size2D::new(30,30);
         let row_offset: usize = 10;
@@ -435,8 +424,49 @@ mod tests {
             MemIndex2D{row: 2, col: 2},
         ];
 
-        let actual_indexes: Vec<MemIndex2D> = intersections.iter().map(|i| i.grid_index.0).collect();
+        let mut actual_indexes: Vec<MemIndex2D> = intersections.iter().map(|i| i.grid_index.0).collect();
         assert_eq!(expected_indexes, actual_indexes);
+
+
+        let non_uniform_grid = NonUniformMemGrid2D::new(size, vec![10, 20], vec![10, 20]);
+        let test_range2d: MemSpan2D = MemSpan2D::new_from_index2d(MemIndex2D{row: 5, col: 5}, MemIndex2D{row: 25, col: 25});
+        let (grid_range, intersections) = non_uniform_grid.grid_intersections(&test_range2d).unwrap();
+
+        assert_eq!(expected_grid_range.0, grid_range.0);
+
+        actual_indexes = intersections.iter().map(|i| i.grid_index.0).collect();
+        assert_eq!(expected_indexes, actual_indexes);
+    }
+
+    #[test]
+    fn test_grid_intersections_single()
+    {
+        let size: Size2D = Size2D::new(30,30);
+        let row_offset: usize = 10;
+        let column_offset: usize = 10;
+        let grid = MemGrid2D::new(size, row_offset, column_offset);
+
+        let mut test_range: MemSpan2D = MemSpan2D::new_from_usize(10, 10, 20, 20);
+        let (mut grid_range, mut intersections) = grid.grid_intersections(&test_range).unwrap();
+
+        let expected_grid_range: GridRange2D = GridRange2D(MemSpan2D::new_from_usize(1,1,2,2));
+        assert_eq!(expected_grid_range.0, grid_range.0);
+
+        let expected_intersections: Vec<GridIntersection> = vec![
+            GridIntersection{
+                grid_index: GridIndex(MemIndex2D{row: 1, col: 1}),
+                intersection: MemSpan2D::new_from_usize(0, 0, 10, 10)
+            }
+        ];
+
+        assert_eq!(expected_intersections, intersections);
+
+        test_range = MemSpan2D::new_from_usize(5, 5, 15, 15);
+        let non_uniform_grid = NonUniformMemGrid2D::new(size, vec![5,15], vec![5,15]);
+        (grid_range, intersections) = non_uniform_grid.grid_intersections(&test_range).unwrap();
+
+        assert_eq!(expected_grid_range.0, grid_range.0);
+        assert_eq!(expected_intersections, intersections);
     }
 
     #[test]
@@ -446,9 +476,15 @@ mod tests {
         let row_offsets = vec![2, 4, 6, 8];
         let column_offsets = vec![2, 4, 6, 8];
         let grid = NonUniformMemGrid2D::new(size, row_offsets, column_offsets);
-        let index2d = MemIndex2D::new(4, 4);
 
-        let grid_index = grid.index2d_to_grid_index(&index2d).unwrap();
+        assert_eq!(grid.grid_row_count(), 5);
+        assert_eq!(grid.grid_column_count(), 5);
+        assert_eq!(9, grid.max_row().unwrap());
+        assert_eq!(9, grid.max_col().unwrap());
+
+        let mut index2d = MemIndex2D::new(4, 4);
+
+        let mut grid_index = grid.index2d_to_grid_index(&index2d).unwrap();
 
         assert_eq!(MemIndex2D{row: 2, col: 2}, grid_index.0);
 
@@ -458,6 +494,105 @@ mod tests {
         assert!(grid.index2d_relative_to_grid(&MemIndex2D::new(1, 1), &GridIndex::new(1, 1)).is_none());
         assert!(grid.index2d_to_grid_index(&MemIndex2D::new(10, 10)).is_none());
 
-        
+        index2d = MemIndex2D::new(8, 8);
+        grid_index = GridIndex(MemIndex2D{row: 4, col: 4});
+        assert_eq!(grid_index.0, grid.index2d_to_grid_index(&index2d).unwrap().0);
+        assert_eq!(index2d, grid.grid_index_to_index2d(&grid_index).unwrap());
+
+        let expected_span2D: MemSpan2D = MemSpan2D::new_from_index2d(MemIndex2D{row: 8, col: 8}, MemIndex2D{row: 10, col: 10});
+        let actual_span2D: MemSpan2D = grid.grid_index_span2d(&grid_index).unwrap();
+
+        assert_eq!(expected_span2D, actual_span2D);
+    }
+
+    #[test]
+    fn test_grid_intersections_partial_overlap() {
+        let size: Size2D = Size2D::new(30,30);
+        let row_offset: usize = 10;
+        let column_offset: usize = 10;
+        let grid = MemGrid2D::new(size, row_offset, column_offset);
+
+        let test_span2d = MemSpan2D::new_from_index2d(MemIndex2D{row: 0, col: 5}, MemIndex2D{row: 15, col: 25});
+        let (grid_range, intersections) = grid.grid_intersections(&test_span2d).unwrap();
+
+        let mut expected_grid_range: GridRange2D = GridRange2D(MemSpan2D::new_from_usize(0,0,2,3));
+        assert_eq!(expected_grid_range.0, grid_range.0);
+
+        let mut expected_intersections: Vec<GridIntersection> = vec![
+            GridIntersection{
+                grid_index: GridIndex(MemIndex2D{row: 0, col: 0}),
+                intersection: MemSpan2D::new_from_usize(0, 5, 10, 10)
+            },
+            GridIntersection{
+                grid_index: GridIndex(MemIndex2D{row: 0, col: 1}),
+                intersection: MemSpan2D::new_from_usize(0, 0, 10, 10)
+            },
+            GridIntersection{
+                grid_index: GridIndex(MemIndex2D{row: 0, col: 2}),
+                intersection: MemSpan2D::new_from_usize(0, 0, 10, 5)
+            },
+            GridIntersection{
+                grid_index: GridIndex(MemIndex2D{row: 1, col: 0}),
+                intersection: MemSpan2D::new_from_usize(0, 5, 5, 10)
+            },
+            GridIntersection{
+                grid_index: GridIndex(MemIndex2D{row: 1, col: 1}),
+                intersection: MemSpan2D::new_from_usize(0, 0, 5, 10)
+            },
+            GridIntersection{
+                grid_index: GridIndex(MemIndex2D{row: 1, col: 2}),
+                intersection: MemSpan2D::new_from_usize(0, 0, 5, 5)
+            }
+        ];
+
+        assert_eq!(expected_intersections, intersections);
+
+        let non_uniform_grid = NonUniformMemGrid2D::new(size, vec![7, 14], vec![7, 14]);
+        let (grid_range, intersections) = non_uniform_grid.grid_intersections(&test_span2d).unwrap();
+
+        expected_grid_range = GridRange2D(MemSpan2D::new_from_usize(0,0,3,3));
+        assert_eq!(expected_grid_range.0, grid_range.0);
+
+        expected_intersections = vec![
+            GridIntersection{
+                grid_index: GridIndex(MemIndex2D{row: 0, col: 0}),
+                intersection: MemSpan2D::new_from_usize(0, 5, 7, 7)
+            },
+            GridIntersection{
+                grid_index: GridIndex(MemIndex2D{row: 0, col: 1}),
+                intersection: MemSpan2D::new_from_usize(0, 0, 7, 7)
+            },
+            GridIntersection{
+                grid_index: GridIndex(MemIndex2D{row: 0, col: 2}),
+                intersection: MemSpan2D::new_from_usize(0, 0, 7, 11)
+            },
+            GridIntersection{
+                grid_index: GridIndex(MemIndex2D{row: 1, col: 0}),
+                intersection: MemSpan2D::new_from_usize(0, 5, 7, 7)
+            },
+            GridIntersection{
+                grid_index: GridIndex(MemIndex2D{row: 1, col: 1}),
+                intersection: MemSpan2D::new_from_usize(0, 0, 7, 7)
+            },
+            GridIntersection{
+                grid_index: GridIndex(MemIndex2D{row: 1, col: 2}),
+                intersection: MemSpan2D::new_from_usize(0, 0, 7, 11)
+            },
+            GridIntersection{
+                grid_index: GridIndex(MemIndex2D{row: 2, col: 0}),
+                intersection: MemSpan2D::new_from_usize(0, 5, 1, 7)
+            },
+            GridIntersection{
+                grid_index: GridIndex(MemIndex2D{row: 2, col: 1}),
+                intersection: MemSpan2D::new_from_usize(0, 0, 1, 7)
+            },
+            GridIntersection{
+                grid_index: GridIndex(MemIndex2D{row: 2, col: 2}),
+                intersection: MemSpan2D::new_from_usize(0, 0, 1, 11)
+            }
+
+        ];
+
+        assert_eq!(expected_intersections, intersections);
     }
 }
