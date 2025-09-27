@@ -12,6 +12,7 @@ use memory_math::{
     memory_iterators::LinearMemoryIterator,
     memory_offset2d::MemOffset2D,
 };
+use memory_math::memory_span2d::MemSpanIndex2D;
 use memory_math::memory_span::MemSpan;
 use memory_math::size_2d::{HasSize2D, Size2D};
 use super::{vec2d_iter::Vec2DIntoIter};
@@ -238,30 +239,29 @@ impl<T> Vec2D<T> {
     }
 
     /// Get a 1D slice view of a rectangular region
-    pub fn get_slice(&self, span2d: MemSpan2D) -> Option<Vec2DSlice<T>> {
-
-        let min_row: usize = span2d.min_row();
-        let max_row: usize = span2d.max_row()?;
-
-        if max_row >= self.row_count() {
+    pub fn get_slice(&self, span2d: MemSpan2D) -> Option<Vec2DSlice<'_, T>>
+    {
+        if span2d.area() == 0 {
             return None;
         }
 
-        let mut row_slices = Vec::with_capacity(max_row - min_row + 1);
-        for row in min_row..=max_row {
-            if let Some(row_slice) = self.get_row_slice(row, span2d.col_span) {
-                row_slices.push(row_slice);
-            } else {
-                return None;
-            }
+        if !self.size.index2d_in_bounds(&span2d.min_absolute_index2d())
+        {
+            return None;
         }
 
-        let size: Size2D = Size2D::new(span2d.row_span.len(), span2d.column_count());
+        if !self.size.index2d_in_bounds(&span2d.max_absolute_index2d()?)
+        {
+            return None;
+        }
 
-        Some(Vec2DSlice {
-            row_slices,
-            size
-        })
+        Some(
+            Vec2DSlice::new(
+                self.size,
+                span2d,
+                &self.items[0..self.size.max_index()]
+            )
+        )
     }
 
 
@@ -271,8 +271,8 @@ impl<T> Vec2D<T> {
             return None;
         }
 
-        let min_index2d: MemIndex2D = span2d.min_index2d();
-        let max_index2d: MemIndex2D = span2d.max_index2d()?;
+        let min_index2d: MemIndex2D = span2d.min_absolute_index2d();
+        let max_index2d: MemIndex2D = span2d.max_absolute_index2d()?;
 
         let min_index: usize = self.index2d_to_index(min_index2d)?;
         let max_index: usize = self.index2d_to_index(max_index2d)?;
@@ -352,11 +352,11 @@ impl<T> Vec2D<T> {
         {
             return None;
         }
-        spans.sort_by_key(|span| span.min_index2d());
+        spans.sort_by_key(|span| span.min_absolute_index2d());
 
         // Validate all spans are within bounds
         for span in &spans {
-            let min_idx = span.min_index2d();
+            let min_idx = span.min_absolute_index2d();
             let max_idx = span.max_index2d()?;
             if !self.index2d_in_bounds(&min_idx) || !self.index2d_in_bounds(&max_idx) {
                 return None;
@@ -603,57 +603,91 @@ impl<'a, T> Iterator for Vec2DMutSliceIterMut<'a, T> {
     }
 }
 
+
+
 /// A 2D slice view that contains a vector of row slices
 pub struct Vec2DSlice<'a, T> {
-    row_slices: Vec<&'a [T]>,
-    pub size: Size2D
+    pub vec_size: Size2D,
+    pub span2d: MemSpan2D,
+    data: &'a [T]
 }
 
-impl<'a,T> HasSize2D for Vec2DSlice<'a, T> {
+impl<'a, T> Index<MemSpanIndex2D> for Vec2DSlice<'a, T> {
 
-    #[inline]
-    fn row_count(&self) -> usize {
-        self.size.row_count
+    type Output = T;
+
+    fn index(&self, index: MemSpanIndex2D) -> &Self::Output {
+        self.get_span_index2d(&index).unwrap()
     }
+}
 
-    #[inline]
-    fn column_count(&self) -> usize {
-        self.size.column_count
-    }
+impl<'a, T> Index<MemIndex2D> for Vec2DSlice<'a, T> {
 
-    #[inline]
-    fn size(&self) -> Size2D {
-        self.size
+    type Output = T;
+
+    fn index(&self, index: MemIndex2D) -> &Self::Output {
+        self.get_vec_index2d(index).unwrap()
     }
 }
 
 impl<'a, T> Vec2DSlice<'a, T> {
 
-    pub fn get(&self, row: usize, column: usize) -> Option<&'a T>
-    {
-        self.get_index2d(MemIndex2D::new(row, column))
+    pub fn new(vec_size: Size2D, span2d: MemSpan2D, data: &'a [T]) -> Self {
+        Vec2DSlice {
+            vec_size,
+            span2d,
+            data
+        }
     }
 
-    pub fn get_index2d(&self, index2d: MemIndex2D) -> Option<&'a T> {
-        if !self.index2d_in_bounds(&index2d) {
-            return None;
-        }
 
-        self.row_slices.get(index2d.row)?.get(index2d.col)
+    ///Get item at index, where index is relative to the span2d of the slice.
+    /// If you want to access relative to the original vec, use
+    /// get_span_vecindex2d()
+    pub fn get_span_index2d(&self, span_index: &MemSpanIndex2D) -> Option<&'a T>
+    {
+        let vec_index: MemIndex2D = self.span2d.relative_index2d_to_absolute_index2d(span_index.clone())?;
+        self.get_vec_index2d(vec_index)
+    }
+
+    pub fn get_span_index(&self, row: usize, column: usize) -> Option<&'a T>
+    {
+        self.get_span_index2d(&MemSpanIndex2D(MemIndex2D::new(row, column)))
+    }
+
+    pub fn get_vec_index(&self, row: usize, column: usize) -> Option<&'a T>
+    {
+        self.get_vec_index2d(MemIndex2D::new(row, column))
+    }
+
+    //Get item at index, where index is relative to the original Vec2D
+    //If you want to access relative to the span2d of the slice, use
+    //get_span_index2d()
+    pub fn get_vec_index2d(&self, vec_index2d: MemIndex2D) -> Option<&'a T>
+    {
+        let index: usize = self.vec_size.index2d_to_index(vec_index2d)?;
+        Some(&self.data[index])
     }
 
     /// Get the element at slice-relative coordinates, panicking if out of bounds
     pub fn get_unchecked(&self, row: usize, col: usize) -> &T {
-        &self.row_slices[row][col]
+        &self.data[self.vec_size.row_column_to_index(row, col).unwrap()]
     }
 
     /// Get a complete row slice within the 2D slice bounds
-    pub fn get_row(&self, row: usize) -> Option<&[T]> {
-        if row >= self.row_count() {
+    pub fn get_span_row(&self, row: usize) -> Option<&[T]> {
+        if row >= self.span2d.row_count() {
             return None;
         }
 
-        Some(self.row_slices[row])
+        //convert row to memspan
+        let min_index2d: MemIndex2D = self.span2d.relative_index2d_to_absolute_index2d(self.span2d.min_relative_index_for_row(row)?)?;
+        let max_index2d: MemIndex2D = self.span2d.relative_index2d_to_absolute_index2d(self.span2d.max_relative_index_for_row(row)?)?;
+
+        let min_index: usize = self.vec_size.index2d_to_index_unchecked(min_index2d);
+        let max_index: usize = self.vec_size.index2d_to_index_unchecked(max_index2d);
+
+        Some(&self.data[min_index..=max_index])
     }
 
     /// Iterator over all elements in the 2D slice (row by row)
@@ -667,7 +701,7 @@ impl<'a, T> Vec2DSlice<'a, T> {
 
     /// Iterator over all rows in the 2D slice
     pub fn rows(&self) -> impl Iterator<Item = &[T]> {
-        (0..self.row_count()).map(move |row| self.get_row(row).unwrap())
+        (0..self.span2d.row_count()).map(move |row| self.get_span_row(row).unwrap())
     }
 
     /// Collect all elements into a Vec (row by row order)
@@ -684,7 +718,7 @@ impl<'a, T> Vec2DSlice<'a, T> {
         T: Clone,
     {
         Vec2D {
-            size: self.size,
+            size: self.span2d.size(),
             items: self.to_vec(),
         }
     }
@@ -717,15 +751,15 @@ impl<'a, T> Iterator for Vec2DSliceIter<'a, T> {
     type Item = &'a T;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.current_row >= self.slice.row_count() {
+        if self.current_row >= self.slice.span2d.row_count() {
             return None;
         }
 
-        let result = self.slice.get(self.current_row, self.current_col);
+        let result = self.slice.get_span_index(self.current_row, self.current_col);
 
         // Move to next position
         self.current_col += 1;
-        if self.current_col >= self.slice.column_count() {
+        if self.current_col >= self.slice.span2d.column_count() {
             self.current_col = 0;
             self.current_row += 1;
         }
@@ -820,18 +854,18 @@ mod tests {
         // Get a 2x2 slice from the center
         let slice = vec2d.get_slice(MemSpan2D::new_from_usize(1, 1, 3, 3)).unwrap();
 
-        assert_eq!(slice.column_count(), 2);
-        assert_eq!(slice.row_count(), 2);
+        assert_eq!(slice.span2d.column_count(), 2);
+        assert_eq!(slice.span2d.row_count(), 2);
 
         // Test element access
-        assert_eq!(slice.get(0, 0), Some(&5));
-        assert_eq!(slice.get(0, 1), Some(&6));
-        assert_eq!(slice.get(1, 0), Some(&9));
-        assert_eq!(slice.get(1, 1), Some(&10));
+        assert_eq!(slice.get_span_index(0, 0), Some(&5));
+        assert_eq!(slice.get_span_index(0, 1), Some(&6));
+        assert_eq!(slice.get_span_index(1, 0), Some(&9));
+        assert_eq!(slice.get_span_index(1, 1), Some(&10));
 
         // Test row access
-        assert_eq!(slice.get_row(0), Some([5, 6].as_slice()));
-        assert_eq!(slice.get_row(1), Some([9, 10].as_slice()));
+        assert_eq!(slice.get_span_row(0), Some([5, 6].as_slice()));
+        assert_eq!(slice.get_span_row(1), Some([9, 10].as_slice()));
 
         // Test iterator
         let values: Vec<i32> = slice.iter().cloned().collect();
@@ -894,17 +928,17 @@ mod tests {
 
         // Single element slice
         let mut slice = vec2d.get_slice(MemSpan2D::new_from_usize(1, 1, 2, 2)).unwrap();
-        assert_eq!(slice.column_count(), 1);
-        assert_eq!(slice.row_count(), 1);
-        assert_eq!(slice.get(0, 0), Some(&4));
+        assert_eq!(slice.span2d.column_count(), 1);
+        assert_eq!(slice.span2d.row_count(), 1);
+        assert_eq!(slice.get_span_index(0, 0), Some(&4));
 
         assert_eq!([6,7,8].as_slice(), vec2d.get_row(2).unwrap());
 
         // Full row slice
         slice = vec2d.get_slice(MemSpan2D::new_from_usize(2, 0, 3, 3)).unwrap();
-        assert_eq!(slice.column_count(), 3);
-        assert_eq!(slice.row_count(), 1);
-        assert_eq!(slice.get_row(0), Some([6, 7, 8].as_slice()));
+        assert_eq!(slice.span2d.column_count(), 3);
+        assert_eq!(slice.span2d.row_count(), 1);
+        assert_eq!(slice.get_span_row(0), Some([6, 7, 8].as_slice()));
 
         // Invalid bounds should return None
         assert!(vec2d.get_slice(MemSpan2D::new_from_usize(0, 0, 5, 5)).is_none());
@@ -949,8 +983,8 @@ mod tests {
 
         let slice = vec2d.get_slice(MemSpan2D::new_from_usize(0, 0, 2, 2)).unwrap(); // 2x2 top-left corner
 
-        assert_eq!([1, 2].as_slice(), slice.get_row(0).unwrap());
-        assert_eq!([4, 5].as_slice(), slice.get_row(1).unwrap());
+        assert_eq!([1, 2].as_slice(), slice.get_span_row(0).unwrap());
+        assert_eq!([4, 5].as_slice(), slice.get_span_row(1).unwrap());
         // Test contains
         assert!(slice.contains(&1));
         assert!(slice.contains(&4));

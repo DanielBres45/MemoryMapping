@@ -56,8 +56,8 @@ pub trait MemoryGrid : HasSize2D
     {
         let mut intersections: Vec<GridIntersection> = Vec::new();
 
-        let min_grid_index: GridIndex = self.index2d_to_grid_index(&span2d.min_index2d())?;
-        let max_grid_index: GridIndex = self.index2d_to_grid_index(&span2d.max_index2d()?)?;
+        let min_grid_index: GridIndex = self.index2d_to_grid_index(&span2d.min_absolute_index2d())?;
+        let max_grid_index: GridIndex = self.index2d_to_grid_index(&span2d.max_absolute_index2d()?)?;
 
         for row in min_grid_index.row()..=max_grid_index.row()
         {
@@ -68,7 +68,7 @@ pub trait MemoryGrid : HasSize2D
 
                 if let Some(intersection) = cur_grid_span.intersect(span2d)
                 {
-                    let span_in_grid: MemSpan2D = (intersection - MemOffset2D::from(cur_grid_span.min_index2d())).unwrap();
+                    let span_in_grid: MemSpan2D = (intersection - MemOffset2D::from(cur_grid_span.min_absolute_index2d())).unwrap();
                     intersections.push(GridIntersection{grid_index, intersection: span_in_grid});
                 }
             }

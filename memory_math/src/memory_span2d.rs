@@ -12,6 +12,18 @@ pub struct MemSpan2D
     pub col_span: MemSpan
 }
 
+///Represents an index into a 2D span.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MemSpanIndex2D(pub MemIndex2D);
+
+impl MemSpanIndex2D
+{
+    pub fn new(row: usize, col: usize) -> Self
+    {
+        MemSpanIndex2D(MemIndex2D::new(row, col))
+    }
+}
+
 impl HasSize2D for MemSpan2D
 {
     #[inline]
@@ -105,6 +117,8 @@ impl Sub<MemOffset2D> for MemSpan2D
     }
 }
 
+
+//TODO: Change the nomenclature from vec_index and span_index to absolute_index and relative_index
 impl MemSpan2D {
 
     #[inline]
@@ -117,6 +131,11 @@ impl MemSpan2D {
     pub fn max_column(&self) -> Option<usize>
     {
          MemSpan::max(&self.col_span)
+    }
+
+    pub fn max_span_column(&self) -> usize
+    {
+        self.col_span.len()
     }
 
     #[inline]
@@ -138,20 +157,81 @@ impl MemSpan2D {
     }
 
     #[inline]
-    pub fn min_index_for_row(&self, row: usize) -> MemIndex2D
+    pub fn relative_index2d_to_absolute_index2d(&self, index: MemSpanIndex2D) -> Option<MemIndex2D>
     {
-        let min_col = self.min_column();
-        MemIndex2D::new(row, min_col)
+        index.0 + MemOffset2D::from(self.min_absolute_index2d())
     }
 
-    pub fn min_index2d(&self) -> MemIndex2D
+    #[inline]
+    pub fn min_relative_index_for_row(&self, row: usize) -> Option<MemSpanIndex2D>
+    {
+        if row > self.row_span.max_value()?
+        {
+            return None;
+        }
+
+        Some(MemSpanIndex2D::new(row, 0))
+    }
+
+    pub fn min_absolute_index_for_row(&self, row: usize) -> Option<MemIndex2D>
+    {
+        if row < self.min_row() || row > self.max_row()?
+        {
+            return None;
+        }
+
+        let min_col: usize = self.min_column();
+        Some(MemIndex2D::new(row, min_col))
+    }
+
+    #[inline]
+    pub fn max_relative_index_for_row(&self, row: usize) -> Option<MemSpanIndex2D>
+    {
+        let max_col: usize = self.size().max_col()?;
+
+        if max_col == 0
+        {
+            return None;
+        }
+
+        Some(MemSpanIndex2D::new(row, max_col))
+    }
+
+    pub fn max_absolute_index_for_row(&self, row: usize) -> Option<MemIndex2D>
+    {
+        if row < self.min_row() || row > self.max_row()?
+        {
+            return None;
+        }
+
+        let max_col: usize = self.max_column()?;
+        Some(MemIndex2D::new(row, max_col))
+    }
+
+    #[inline]
+    pub fn min_relative_index2d(&self) -> MemSpanIndex2D
+    {
+        MemSpanIndex2D(MemIndex2D::origin())
+    }
+
+    #[inline]
+    pub fn max_relative_index2d(&self) -> Option<MemSpanIndex2D>
+    {
+        match self.size().max_index2d()
+        {
+            Some(max_index2d) => Some(MemSpanIndex2D(max_index2d)),
+            None => None
+        }
+    }
+
+    pub fn min_absolute_index2d(&self) -> MemIndex2D
     {
         let min_row = self.min_row();
         let min_col = self.min_column();
         MemIndex2D::new(min_row, min_col)
     }
 
-    pub fn max_index2d(&self) -> Option<MemIndex2D>
+    pub fn max_absolute_index2d(&self) -> Option<MemIndex2D>
     {
         let max_row: usize = self.max_row()?;
         let max_col: usize = self.max_column()?;
@@ -306,9 +386,9 @@ impl MemSpan2D {
         })
     }
 
-    pub fn contains(&self, index2d: MemIndex2D) -> bool
+    pub fn contains(&self, index2d: &MemSpanIndex2D) -> bool
     {
-        self.row_span.contains(index2d.row) && self.col_span.contains(index2d.col)
+        self.row_span.contains(index2d.0.row) && self.col_span.contains(index2d.0.col)
     }
 
     pub fn intersect(&self, other: &MemSpan2D) -> Option<MemSpan2D>
@@ -332,6 +412,19 @@ impl MemSpan2D {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_indexing()
+    {
+        let span: MemSpan2D = MemSpan2D::new_from_usize(1,1,3,3);
+
+        let min_row_span_index2d: MemSpanIndex2D = span.min_relative_index_for_row(0).unwrap();
+        assert_eq!(MemIndex2D::new(0,0), min_row_span_index2d.0);
+
+        let min_row_index2d: MemIndex2D = span.relative_index2d_to_absolute_index2d(min_row_span_index2d).unwrap();
+        assert_eq!(MemIndex2D::new(1,1), min_row_index2d);
+
+    }
 
     #[test]
     fn test_intersect_col_disjoint()

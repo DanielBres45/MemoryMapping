@@ -60,12 +60,30 @@ pub trait HasSize2D
         self.area() - 1
     }
 
+    #[inline]
+    fn max_index2d(&self) -> Option<MemIndex2D>
+    {
+        let max_row: usize = self.max_row()?;
+        let max_col: usize = self.max_col()?;
+        Some(MemIndex2D::new(max_row, max_col))
+    }
+
     fn index2d_to_index(&self, index2d: MemIndex2D) -> Option<usize> {
         if index2d.row >= self.row_count() || index2d.col >= self.column_count() {
             return None;
         }
 
-        Some(index2d.row * self.column_count() + index2d.col)
+        Some(self.index2d_to_index_unchecked(index2d))
+    }
+
+    #[inline]
+    fn index2d_to_index_unchecked(&self, index2d: MemIndex2D) -> usize {
+        index2d.row * self.column_count() + index2d.col
+    }
+
+    fn row_column_to_index(&self, row: usize, column: usize) -> Option<usize>
+    {
+        self.index2d_to_index(MemIndex2D::new(row, column))
     }
 
     fn index_to_index2d(&self, index: usize) -> Option<MemIndex2D> {

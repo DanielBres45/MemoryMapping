@@ -14,6 +14,7 @@ use memory_math::memory_span::MemSpan;
 use crate::vec2d::{MutVec2DMethods, Vec2DMethods, Vec2DSlice};
 use super::{vec2d::Vec2D, vec2d_iter::Vec2DIntoIter};
 use memory_math::mem_grid::{GridIndex, MemGrid2D, MemoryGrid, NonUniformMemGrid2D};
+use memory_math::memory_span2d::MemSpanIndex2D;
 use memory_math::size_2d::{HasSize2D, Size2D};
 
 pub struct TileMap<T>
@@ -208,28 +209,28 @@ impl<'a, T> TileMapSlice<'a, T>
 {
     #[inline]
     pub fn start_grid_row_count(&self) -> usize {
-        self.tile_slices[0].row_count()
+        self.tile_slices[0].span2d.row_count()
     }
 
     #[inline]
     pub fn start_grid_column_count(&self) -> usize {
-        self.tile_slices[0].column_count()
+        self.tile_slices[0].span2d.column_count()
     }
 
     #[inline]
     pub fn end_grid_row_count(&self) -> usize {
-        self.tile_slices[self.tile_slices.row_count() - 1].row_count()
+        self.tile_slices[self.tile_slices.row_count() - 1].span2d.row_count()
     }
 
     #[inline]
     pub fn end_grid_column_count(&self) -> usize {
-        self.tile_slices[self.tile_slices.column_count() - 1].column_count()
+        self.tile_slices[self.tile_slices.column_count() - 1].span2d.column_count()
     }
 
     pub fn get(&self, cell_index2d: MemIndex2D) -> Option<&'a T> {
         let grid_index: GridIndex = self.grid.index2d_to_grid_index(&cell_index2d)?;
-        let index_in_grid: MemIndex2D = self.grid.index2d_relative_to_grid(&cell_index2d, &grid_index)?;
-        self.tile_slices[grid_index.0].get_index2d(index_in_grid)
+        let index_in_grid: MemSpanIndex2D = MemSpanIndex2D(self.grid.index2d_relative_to_grid(&cell_index2d, &grid_index)?);
+        self.tile_slices[grid_index.0].get_span_index2d(&index_in_grid)
     }
 }
 
