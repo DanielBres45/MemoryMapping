@@ -1,4 +1,4 @@
-use std::ops::{Neg, Sub};
+use std::ops::{Add, Neg, Sub};
 
 use super::memory_index2d::MemIndex2D;
 
@@ -35,6 +35,14 @@ impl PartialOrd for MemOffset2D
             ord => return ord,
         }
         self.col.partial_cmp(&other.col)
+    }
+}
+
+impl Add<MemIndex2D> for MemOffset2D {
+
+    type Output = Option<MemIndex2D>;
+    fn add(self, rhs: MemIndex2D) -> Self::Output {
+        rhs + self
     }
 }
 

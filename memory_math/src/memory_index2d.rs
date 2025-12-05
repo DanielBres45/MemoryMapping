@@ -4,6 +4,8 @@ use std::{fmt, ops::Add};
 use std::cmp::Ordering;
 use super::memory_offset2d::MemOffset2D;
 
+
+//TODO: Write lexicographic comparer
 #[derive(Copy, Clone)]
 pub struct MemIndex2D
 {
@@ -163,6 +165,7 @@ impl Add<MemOffset2D> for MemIndex2D{
         })
     }
 }
+
 
 impl Sub<MemOffset2D> for MemIndex2D
 {

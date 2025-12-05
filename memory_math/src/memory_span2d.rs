@@ -5,23 +5,14 @@ use crate::memory_span::MemSpan;
 use crate::size_2d::{HasSize2D, Size2D};
 use super::{memory_index2d::MemIndex2D, memory_offset2d::MemOffset2D};
 
+///Represents a the bounds of a 2d view into an area of memory
+/// A Half-open (inclusive lower bound, exclusive upper bound) 2d span
+///
 #[derive(Clone, Debug)]
 pub struct MemSpan2D
 {
     pub row_span: MemSpan,
     pub col_span: MemSpan
-}
-
-///Represents an index into a 2D span.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct MemSpanIndex2D(pub MemIndex2D);
-
-impl MemSpanIndex2D
-{
-    pub fn new(row: usize, col: usize) -> Self
-    {
-        MemSpanIndex2D(MemIndex2D::new(row, col))
-    }
 }
 
 impl HasSize2D for MemSpan2D
@@ -62,34 +53,6 @@ impl Display for MemSpan2D
     }
 }
 
-
-impl HasMemSpan2D for MemSpan2D
-{
-    #[inline]
-    fn column_lower_bound(&self) -> usize
-    {
-        self.col_span.min
-    }
-
-    #[inline]
-    fn column_upper_bound(&self) -> usize
-    {
-        self.col_span.count
-    }
-
-    #[inline]
-    fn row_lower_bound(&self) -> usize
-    {
-        self.row_span.min
-    }
-
-    #[inline]
-    fn row_upper_bound(&self) -> usize
-    {
-        self.row_span.count
-    }
-}
-
 impl Add<MemOffset2D> for MemSpan2D
 {
     type Output = Option<MemSpan2D>;
@@ -118,7 +81,6 @@ impl Sub<MemOffset2D> for MemSpan2D
 }
 
 
-//TODO: Change the nomenclature from vec_index and span_index to absolute_index and relative_index
 impl MemSpan2D {
 
     #[inline]
@@ -144,6 +106,11 @@ impl MemSpan2D {
         self.row_span.min
     }
 
+    pub fn valid(&self) -> bool
+    {
+        self.row_count() != 0 && self.column_count() != 0
+    }
+
     #[inline]
     pub fn contains_row(&self, row: usize) -> bool
     {
@@ -157,20 +124,9 @@ impl MemSpan2D {
     }
 
     #[inline]
-    pub fn relative_index2d_to_absolute_index2d(&self, index: MemSpanIndex2D) -> Option<MemIndex2D>
+    pub fn relative_index2d_to_absolute_index2d(&self, span_index: MemIndex2D) -> Option<MemIndex2D>
     {
-        index.0 + MemOffset2D::from(self.min_absolute_index2d())
-    }
-
-    #[inline]
-    pub fn min_relative_index_for_row(&self, row: usize) -> Option<MemSpanIndex2D>
-    {
-        if row > self.row_span.max_value()?
-        {
-            return None;
-        }
-
-        Some(MemSpanIndex2D::new(row, 0))
+        MemOffset2D::from(self.min_absolute_index2d()) + span_index
     }
 
     pub fn min_absolute_index_for_row(&self, row: usize) -> Option<MemIndex2D>
@@ -184,19 +140,6 @@ impl MemSpan2D {
         Some(MemIndex2D::new(row, min_col))
     }
 
-    #[inline]
-    pub fn max_relative_index_for_row(&self, row: usize) -> Option<MemSpanIndex2D>
-    {
-        let max_col: usize = self.size().max_col()?;
-
-        if max_col == 0
-        {
-            return None;
-        }
-
-        Some(MemSpanIndex2D::new(row, max_col))
-    }
-
     pub fn max_absolute_index_for_row(&self, row: usize) -> Option<MemIndex2D>
     {
         if row < self.min_row() || row > self.max_row()?
@@ -206,22 +149,6 @@ impl MemSpan2D {
 
         let max_col: usize = self.max_column()?;
         Some(MemIndex2D::new(row, max_col))
-    }
-
-    #[inline]
-    pub fn min_relative_index2d(&self) -> MemSpanIndex2D
-    {
-        MemSpanIndex2D(MemIndex2D::origin())
-    }
-
-    #[inline]
-    pub fn max_relative_index2d(&self) -> Option<MemSpanIndex2D>
-    {
-        match self.size().max_index2d()
-        {
-            Some(max_index2d) => Some(MemSpanIndex2D(max_index2d)),
-            None => None
-        }
     }
 
     pub fn min_absolute_index2d(&self) -> MemIndex2D
@@ -386,9 +313,9 @@ impl MemSpan2D {
         })
     }
 
-    pub fn contains(&self, index2d: &MemSpanIndex2D) -> bool
+    pub fn contains_index2d(&self, index2d: &MemIndex2D) -> bool
     {
-        self.row_span.contains(index2d.0.row) && self.col_span.contains(index2d.0.col)
+        self.row_span.contains(index2d.row) && self.col_span.contains(index2d.col)
     }
 
     pub fn intersect(&self, other: &MemSpan2D) -> Option<MemSpan2D>
@@ -407,24 +334,39 @@ impl MemSpan2D {
     {
         self.intersect(other).is_some_and(|s| s.area() > 0 )
     }
+
+    //TODO: Write the sorted version of this function.
+    pub fn spans_overlap_or_invalid(spans: &Vec<MemSpan2D>) -> bool
+    {
+        for i in 0..spans.len()
+        {
+            if spans[i].area() == 0
+            {
+                return true;
+            }
+
+            for j in 0..spans.len()
+            {
+                if i == j
+                {
+                    continue;
+                }
+
+                if spans[i].overlaps(&spans[j])
+                {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_indexing()
-    {
-        let span: MemSpan2D = MemSpan2D::new_from_usize(1,1,3,3);
-
-        let min_row_span_index2d: MemSpanIndex2D = span.min_relative_index_for_row(0).unwrap();
-        assert_eq!(MemIndex2D::new(0,0), min_row_span_index2d.0);
-
-        let min_row_index2d: MemIndex2D = span.relative_index2d_to_absolute_index2d(min_row_span_index2d).unwrap();
-        assert_eq!(MemIndex2D::new(1,1), min_row_index2d);
-
-    }
 
     #[test]
     fn test_intersect_col_disjoint()

@@ -1,6 +1,11 @@
 use std::ops::Range;
 use super::{memory_span2d::{MemSpan2D, HasMemSpan2D}, memory_index2d::MemIndex2D, memory_range_iter::HasCurMemIndex};
 
+pub trait MemoryIterator : Iterator<Item=MemIndex2D>
+{
+    fn current_index(&self) -> Option<MemIndex2D>;
+}
+
 pub struct ClockwiseCornerIterator
 {
     extents: MemSpan2D,
@@ -12,17 +17,24 @@ impl Iterator for ClockwiseCornerIterator
     type Item = MemIndex2D;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let current: Option<MemIndex2D> = match self.corner
+        let current = self.current_index();
+        self.corner += 1;
+        current
+    }
+}
+
+impl MemoryIterator for ClockwiseCornerIterator
+{
+    fn current_index(&self) -> Option<MemIndex2D>
+    {
+        match self.corner
         {
             0 => Some(self.extents.min_absolute_index2d()),
             1 => Some(MemIndex2D::new(self.extents.min_row(), self.extents.max_column()?)),
             2 => Some(self.extents.max_absolute_index2d()?),
             3 => Some(MemIndex2D::new(self.extents.max_row()?, self.extents.max_column()?)),
             _ => None
-        };
-
-        self.corner += 1;
-        current
+        }
     }
 }
 
@@ -30,6 +42,19 @@ pub struct LinearMemoryIterator
 {
     extents: MemSpan2D,
     current_index: MemIndex2D
+}
+
+impl MemoryIterator for LinearMemoryIterator
+{
+    fn current_index(&self) -> Option<MemIndex2D>
+    {
+        if self.current_index.row > self.extents.max_row()?
+        {
+            return None;
+        }
+
+        Some(self.current_index)
+    }
 }
 
 impl Iterator for LinearMemoryIterator
@@ -52,7 +77,7 @@ impl DoubleEndedIterator for LinearMemoryIterator {
 
         if next_col == self.extents.max_column()? {
             next_row = self.current_index.row.checked_sub(1)?;
-            if next_row < self.extents.row_lower_bound() {
+            if next_row < self.extents.min_row() {
                 return None;
             }
         }
@@ -96,8 +121,9 @@ impl LinearMemoryIterator
     {
         let col: usize = self.current_index.col;
         self.current_index.col += 1;
-        if col >= self.extents.column_upper_bound()
+        if col > self.extents.max_column().unwrap()
         {
+            self.current_index.col = 0;
             return 0;
         }
 
@@ -112,7 +138,7 @@ impl LinearMemoryIterator
         //slightly more complicated here, treat (None) as < min column
         if let Some(c) = self.current_index.col.checked_sub(1)
         {
-            if c >= self.extents.column_lower_bound()
+            if c >= self.extents.min_column()
             {
                 set = true;
                 self.current_index.col = c;
@@ -131,7 +157,7 @@ impl LinearMemoryIterator
     {
         let row: usize = self.current_index.row;
         self.current_index.row += 1;
-        if row >= self.extents.row_upper_bound()
+        if row > self.extents.max_row()?
         {
             return None;
         }
@@ -185,7 +211,7 @@ impl BoustrophedonIterator
     {
         let row: usize = self.current_index.row.checked_add(1)?;
 
-        if row >= self.range2d.row_upper_bound()
+        if row >= self.range2d.max_row()?
         {
             return None;
         }
@@ -198,7 +224,7 @@ impl BoustrophedonIterator
     {
         let row: usize = self.current_index.row.checked_sub(1)?;
 
-        if row < self.range2d.row_lower_bound()
+        if row < self.range2d.min_row()
         {
             return None;
         }
@@ -217,11 +243,11 @@ impl BoustrophedonIterator
             col = self.current_index.col.checked_add(1)?;
         }
 
-        if col >= self.range2d.column_upper_bound()
+        if col >= self.range2d.max_column()?
         {
             return None;
         }
-        else if col < self.range2d.column_lower_bound()
+        else if col < self.range2d.min_column()
         {
             return None;
         }
@@ -241,11 +267,11 @@ impl BoustrophedonIterator
             col = self.current_index.col.checked_sub(1)?;
         }
 
-        if col >= self.range2d.column_upper_bound()
+        if col > self.range2d.max_column()?
         {
             return None;
         }
-        else if col < self.range2d.column_lower_bound()
+        else if col < self.range2d.min_column()
         {
             return None;
         }

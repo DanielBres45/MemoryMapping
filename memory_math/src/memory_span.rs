@@ -276,6 +276,23 @@ impl MemSpan
     {
         self.intersect(other).is_some_and(|s| s.len() > 0)
     }
+
+    ///Check if the sorted list of MemSpans contain any overlap
+    pub fn spans_have_overlap_sorted(spans: &Vec<MemSpan>) -> bool
+    {
+        for i in 0..spans.len() - 1
+        {
+            if let Some(max) = spans[i].max_value()
+            {
+                if spans[i+1].min < max
+                {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
 }
 
 impl PartialEq for MemSpan
